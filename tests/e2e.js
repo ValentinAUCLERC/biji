@@ -212,7 +212,8 @@ function serve(dir) {
   await penStroke(line(pb.x + 15, pb.y + 50, pb.x + cw - 15, pb.y + 50));
   await penStroke(line(pb.x + cw / 2, pb.y + 12, pb.x + cw / 2, pb.y + 92));
   await p.waitForTimeout(700);
-  await p.waitForFunction(() => document.querySelector('#pad .src').textContent === 'hors ligne' && document.querySelector('#pad .cand'), null, { timeout: 15000 });
+  await p.waitForFunction(() => document.querySelector('#pad .src').textContent === 'hors ligne' && document.querySelector('#pad .cand'), null, { timeout: 15000 })
+    .catch(async (e) => { console.log('DBG', await ev(() => [document.querySelector('#pad .src').textContent, document.querySelector('#pad .cands').textContent.slice(0, 80), Biji.settings.onlineHw])); throw e; });
   const off = await p.$$eval('#pad .cand .ch', (e) => e.map((x) => x.textContent));
   ok(off.includes('十'), 'reconnaissance hors ligne : ' + off.slice(0, 6).join(' '));
   await ev(() => { Biji.settings.onlineHw = true; });
