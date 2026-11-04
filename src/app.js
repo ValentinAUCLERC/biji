@@ -40,7 +40,8 @@
       B.h('button.pill.rec', { 'data-act': 'rec', onclick: recClick }, '● Enregistrer'),
       B.h('button.pill', { 'data-act': 'recpause', hidden: true, onclick: () => B.rec.pause() }, '❚❚ Pause'),
       B.h('span.grow'),
-      B.h('span#savestate'));
+      B.h('span#savestate'),
+      B.h('span#cloud', { 'data-cloud': '' }));
     // les boutons ne gardent pas le focus : sinon Espace (dans les notes) « recliquerait » sur ● Enregistrer
     bar.addEventListener('mousedown', (e) => e.preventDefault());
     return bar;
@@ -78,12 +79,28 @@
     if (!list.length) ul.appendChild(B.h('li.none', q ? 'Aucun cours ne correspond.' : 'Pas encore de cours.'));
     const ds = B.$('#dirstate', side);
     const S = B.store;
+    const G = B.gdrive;
     ds.replaceChildren(
+      G.state === 'on' ? B.h('span.ok', { title: G.email }, '☁ Google Drive : ' + (G.email || 'connecté'))
+        : G.state === 'expired' ? B.h('button.warn', { 'data-cloud': '', onclick: () => G.reconnect() }, '☁ Reconnecter Google Drive')
+          : null,
       S.dirState === 'granted' ? B.h('span.ok', '● Dossier : ' + S.dir.name)
         : S.dirState === 'prompt' ? B.h('button.warn', { onclick: async () => { if (await S.reconnect()) { A.renderSide(); route(); } } }, '⚠ Reconnecter « ' + S.dir.name + ' »')
-          : window.showDirectoryPicker ? B.h('button.warn', { onclick: async () => { if (await S.pickDir()) { A.renderSide(); B.toast('Les notes sont maintenant enregistrées dans le dossier'); } } }, '⚠ Choisir un dossier pour les notes')
-            : B.h('span.hint', 'Notes gardées dans ce navigateur (exporter régulièrement)'));
+          : window.showDirectoryPicker && G.state === 'off' ? B.h('button.warn', { onclick: async () => { if (await S.pickDir()) { A.renderSide(); B.toast('Les notes sont maintenant enregistrées dans le dossier'); } } }, '⚠ Choisir un dossier pour les notes')
+            : G.state === 'off' ? B.h('span.hint', 'Notes gardées dans ce navigateur (exporter régulièrement)') : null);
+    renderCloud();
   };
+  /** Indicateur de synchro dans la barre d'outils (visible aussi sur téléphone) */
+  function renderCloud() {
+    const el = B.$('#cloud');
+    if (!el) return;
+    const G = B.gdrive;
+    el.replaceChildren(G.state === 'expired'
+      ? B.h('button.pill.warn', { 'data-cloud': '', title: 'La connexion Google dure 1 h : un clic pour la renouveler. Les notes restent enregistrées dans ce navigateur en attendant.', onclick: () => G.reconnect() }, '☁ Reconnecter')
+      : G.state === 'on' ? B.h('button.icon', { 'data-cloud': '', title: 'Google Drive : ' + G.email + ' (cliquer pour synchroniser maintenant)', onclick: () => G.syncNow() }, '☁')
+        : '');
+  }
+  A.renderCloud = renderCloud;
 
   function side() {
     return B.h('aside#side',
@@ -118,7 +135,10 @@
       B.h('div.cta',
         B.h('button.primary', { onclick: newLesson }, '+ Nouveau cours'),
         recent ? B.h('a.ghost', { href: '#/c/' + recent.id }, 'Reprendre « ' + (recent.title || 'sans titre') + ' »') : null),
-      S.dirState !== 'granted' && window.showDirectoryPicker ? B.h('div.notice',
+      B.gdrive.available() && B.gdrive.state === 'off' && S.dirState !== 'granted' ? B.h('div.notice',
+        B.h('p', 'Pour retrouver les notes sur le téléphone, la tablette ou un autre PC : se connecter avec Google. Les cours et les enregistrements sont rangés dans un dossier « Biji » du Google Drive.'),
+        B.h('button', { onclick: async () => { if (await B.gdrive.connect()) { A.renderSide(); home(); } } }, 'Se connecter avec Google')) : null,
+      S.dirState !== 'granted' && window.showDirectoryPicker && B.gdrive.state === 'off' ? B.h('div.notice',
         B.h('p', S.dirState === 'prompt'
           ? 'Le dossier de notes « ' + S.dir.name + ' » doit être reconnecté (le navigateur redemande l’autorisation à chaque ouverture).'
           : 'Les notes sont pour l’instant gardées dans ce navigateur seulement. Choisir un dossier (par exemple dans OneDrive) pour avoir de vrais fichiers, sauvegardés, avec les enregistrements audio.'),
@@ -149,7 +169,8 @@
     const S = B.store;
     B.$('#page').replaceChildren(B.h('div.settings',
       B.h('h1', 'Réglages'),
-      B.h('h2', 'Stockage'),
+      cloudSettings(),
+      B.h('h2', 'Dossier sur ce PC'),
       B.h('p', S.dirState === 'granted' ? 'Les notes sont enregistrées dans le dossier « ' + S.dir.name + ' » (un fichier .json par cours, l’audio dans audio/) et dans ce navigateur.'
         : 'Pas de dossier connecté : les notes et l’audio ne sont que dans ce navigateur.'),
       B.h('div.btns',
@@ -178,6 +199,22 @@
       B.h('h2', 'À propos'),
       B.h('p.hint', 'Version ' + (window.BIJI_BUILD || 'dev') + '. Code : github.com/ValentinAUCLERC/biji'),
       B.h('p.hint', 'Dictionnaire : CFDICT (Chine Informations, CC BY-SA 3.0) et compléments french-cedict (Laowai, CC BY-SA 4.0), CC-CEDICT (MDBG, CC BY-SA 4.0). Fréquences : wordfreq (CC BY-SA 4.0). Pinyin : pinyin-pro (MIT). Traits : Hanzi Writer (MIT) et Make Me a Hanzi (Arphic Public License). Reconnaissance hors ligne : HanziLookupJS (GPL). Éditeur : TipTap (MIT).')));
+  }
+
+  function cloudSettings() {
+    const G = B.gdrive;
+    if (!G.available()) return null;
+    const when = B.store.lastSync ? new Date(B.store.lastSync).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
+    return B.h('div',
+      B.h('h2', 'Synchronisation Google Drive'),
+      G.state === 'off'
+        ? [B.h('p', 'Pour retrouver les cours et les enregistrements sur le téléphone, la tablette ou un autre PC. Biji range tout dans un dossier « Biji » du Google Drive et ne peut voir aucun autre fichier.'),
+          B.h('div.btns', B.h('button.primary', { 'data-cloud': '', onclick: async () => { if (await G.connect()) settingsPage(); } }, 'Se connecter avec Google'))]
+        : [B.h('p', (G.state === 'on' ? '☁ Connecté' : '⚠ Connexion expirée') + ' : ' + (G.name ? G.name + ' · ' : '') + G.email + (when ? ' · dernière synchro à ' + when : '')),
+          B.h('div.btns',
+            B.h('button', { 'data-cloud': '', onclick: async () => { await G.syncNow(); settingsPage(); } }, G.state === 'on' ? 'Synchroniser maintenant' : 'Reconnecter'),
+            B.h('button.ghost', { onclick: async () => { if (confirm('Déconnecter Google Drive sur cet appareil ? Les notes restent dans le navigateur et dans le Drive.')) { await G.disconnect(); settingsPage(); A.renderSide(); } } }, 'Déconnecter cet appareil'))],
+      B.h('p.hint', 'La synchro se fait à l’ouverture, toutes les 45 secondes et au retour sur l’onglet. Google limite la connexion à 1 heure : ensuite, un clic sur « ☁ Reconnecter » (rien n’est perdu en attendant). Si un même cours est modifié sur deux appareils en même temps, la dernière modification gagne.'));
   }
 
   function route() {
@@ -217,11 +254,21 @@
       A.renderSide();
       const ed = B.editor.editor;
       const cur = B.editor.lesson;
-      // le dossier contenait une version plus récente du cours ouvert : on recharge s'il n'est pas en cours d'édition
-      if (cur && B.store.get(cur.id) !== cur && !(ed && ed.isFocused)) { B.editor.close(); route(); }
+      // une version plus récente du cours ouvert est arrivée (dossier ou autre appareil)
+      if (cur && B.store.get(cur.id) !== cur) {
+        if (!(ed && ed.isFocused)) { B.editor.close(); route(); return; }
+        if (B.$('#newer')) return;
+        const bar = B.h('div#newer', 'Ce cours a été modifié sur un autre appareil. ',
+          B.h('button', { onclick: () => { bar.remove(); B.editor.close(); route(); } }, 'Afficher cette version'),
+          B.h('button.ghost', { title: 'Garder ce qui est affiché ici (la prochaine modification remplacera l’autre version)', onclick: () => bar.remove() }, 'Garder la mienne'));
+        document.body.appendChild(bar);
+      }
     });
+    document.addEventListener('biji:cloud', () => { A.renderSide(); if (location.hash === '#/reglages') settingsPage(); });
+    document.addEventListener('biji:sync', () => { if (location.hash === '#/reglages') settingsPage(); });
     route();
-    B.store.status(B.store.dirState === 'granted' ? 'Dossier « ' + B.store.dir.name + ' »' : 'Notes dans le navigateur');
+    if (!B.store.lastSync) B.store.status(B.store.dirState === 'granted' ? 'Dossier « ' + B.store.dir.name + ' »' : 'Notes dans le navigateur');
+    renderCloud();
     document.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       if (e.altKey && k === 'h') { e.preventDefault(); B.pad.toggle(); }

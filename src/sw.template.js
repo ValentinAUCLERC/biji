@@ -5,7 +5,7 @@
 const BUILD = '__BUILD__';
 const SHELL = 'biji-shell-' + BUILD;
 const DATA = 'biji-data-__DATA__';
-const SHELL_FILES = ['./', 'index.html', 'app.js', 'build.js', 'style.css', 'data/syllables.js'];
+const SHELL_FILES = ['./', 'index.html', 'app.js', 'build.js', 'config.js', 'style.css', 'data/syllables.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));

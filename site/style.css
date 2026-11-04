@@ -343,6 +343,14 @@ pre.pentest { font: 13px/1.5 ui-monospace, Consolas, monospace; background: #f6e
   border-radius: 10px; display: flex; gap: 10px; align-items: center; box-shadow: 0 10px 30px -10px #0006; }
 #update button { min-height: 32px; padding: 3px 10px; color: var(--ink); }
 
+/* ---------- synchro ---------- */
+#cloud { display: inline-flex; margin-left: 6px; }
+#cloud .pill.warn { background: #fff3d6; border-color: #e8c97a; color: var(--ink); }
+#newer { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 120; background: var(--ink); color: var(--paper);
+  padding: 8px 10px 8px 16px; border-radius: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; box-shadow: 0 10px 30px -10px #0006; max-width: 94vw; }
+#newer button { min-height: 32px; padding: 3px 10px; color: var(--ink); }
+#newer button.ghost { color: var(--paper); border-color: #fff6; background: transparent; }
+
 /* ---------- petits écrans ---------- */
 @media (max-width: 960px) {
   #side { transform: translateX(-100%); transition: transform .2s; box-shadow: 10px 0 40px -20px #0005; }

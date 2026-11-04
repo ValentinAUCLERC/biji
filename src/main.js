@@ -3,6 +3,7 @@ import './util.js';
 import './lex.js';
 import './ime.js';
 import './store.js';
+import './gdrive.js';
 import './ink.js';
 import './zh.js';
 import './pad.js';

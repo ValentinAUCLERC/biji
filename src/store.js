@@ -1,10 +1,12 @@
-/* Biji — stockage : IndexedDB (toujours) + dossier sur le disque (File System Access, Chrome/Edge)
- * Un cours = un fichier <id>.json dans le dossier choisi ; les enregistrements audio vont dans audio/<id>.webm.
+/* Biji — stockage : IndexedDB (toujours) + destinations synchronisées (« backends ») :
+ *   - dossier sur le disque (File System Access, Chrome/Edge PC)
+ *   - Google Drive (gdrive.js) pour téléphone, tablette, autres PC
+ * Un cours = un fichier <id>.json ; les enregistrements audio vont dans audio/<fichier>.webm.
  * Le plus récent (updatedAt) gagne à la fusion. Suppression = « pierre tombale » {id, deleted:true}.
  */
 (function () {
   const B = window.Biji;
-  const S = (B.store = { lessons: new Map(), dir: null, dirState: 'none' /* none | granted | prompt */ });
+  const S = (B.store = { lessons: new Map(), dir: null, dirState: 'none' /* none | granted | prompt */, backends: [] });
 
   let dbp = null;
   function db() {
@@ -33,6 +35,11 @@
   S.tx = tx;
   S.kvGet = (k) => tx('kv', 'readonly', (s) => s.get(k));
   S.kvSet = (k, v) => tx('kv', 'readwrite', (s) => s.put(v, k));
+  const idbAudio = (id) => tx('audio', 'readonly', (s) => s.get(id));
+
+  /** Destination synchronisée : { id, label(), ready(), list(), read(ref), write(lesson), audioNames(), audioPut(rec, blob), audioGet(rec), audioDel(rec) } */
+  S.register = (be) => { S.backends.push(be); };
+  const ready = () => S.backends.filter((b) => b.ready());
 
   S.init = async function () {
     const all = await tx('lessons', 'readonly', (s) => s.getAll());
@@ -41,8 +48,9 @@
     if (h) {
       S.dir = h;
       S.dirState = (await h.queryPermission({ mode: 'readwrite' })) === 'granted' ? 'granted' : 'prompt';
-      if (S.dirState === 'granted') await S.syncFromDir();
     }
+    for (const be of S.backends) if (be.init) await be.init().catch((e) => console.warn(be.id, e));
+    await S.syncAll();
   };
 
   S.list = () => [...S.lessons.values()].filter((l) => !l.deleted)
@@ -50,6 +58,135 @@
   S.get = (id) => { const l = S.lessons.get(id); return l && !l.deleted ? l : null; };
 
   /* ---------- écriture ---------- */
+  const pending = new Map();
+  const flushSoon = B.debounce(() => S.flush(), 700);
+  /** Marque un cours modifié ; écrit après 700 ms d'inactivité */
+  S.touch = function (lesson) {
+    lesson.updatedAt = Date.now();
+    S.lessons.set(lesson.id, lesson);
+    pending.set(lesson.id, lesson);
+    S.status('Modifications…');
+    flushSoon();
+  };
+  S.flush = async function () {
+    if (B.editor && B.editor.syncDoc) B.editor.syncDoc();
+    const items = [...pending.values()];
+    pending.clear();
+    if (!items.length) return;
+    await tx('lessons', 'readwrite', (s) => items.forEach((l) => s.put(l)));
+    const bes = ready();
+    const done = [];
+    for (const be of bes) {
+      let ok = true;
+      for (const l of items) ok = (await be.write(l).catch((e) => { console.warn(be.id, e); return false; })) && ok;
+      if (ok) done.push(be.label());
+    }
+    S.status(done.length ? 'Enregistré · ' + done.join(' + ') : bes.length ? 'Enregistré dans le navigateur (synchro en attente)' : 'Enregistré dans le navigateur');
+  };
+  window.addEventListener('pagehide', () => S.flush());
+  document.addEventListener('visibilitychange', () => document.hidden && S.flush());
+
+  S.create = function (fields) {
+    const l = Object.assign({ id: 'c' + B.uid(), v: 2, title: '', date: B.today(), createdAt: Date.now(),
+      doc: null, inks: {}, grids: {}, vocab: [], recordings: [] }, fields);
+    S.touch(l);
+    return l;
+  };
+  S.remove = function (id) {
+    const l = S.lessons.get(id);
+    if (!l) return;
+    S.touch({ id, deleted: true, title: l.title, createdAt: l.createdAt });
+  };
+
+  /* ---------- audio ---------- */
+  /** Sauve dans le navigateur puis vers chaque destination ; renvoie true si le dossier local l'a reçu */
+  S.saveAudio = async function (rec, blob) {
+    await tx('audio', 'readwrite', (s) => s.put(blob, rec.id));
+    let onDir = false;
+    for (const be of ready()) {
+      const p = be.audioPut(rec, blob).catch((e) => { console.warn(be.id, e); return false; });
+      if (be.id === 'dir') onDir = await p; // l'envoi vers Drive continue en arrière-plan
+    }
+    return onDir;
+  };
+  S.getAudio = async function (rec) {
+    const b = await idbAudio(rec.id);
+    if (b) return b;
+    for (const be of ready()) {
+      const f = await be.audioGet(rec).catch(() => null);
+      if (f) {
+        tx('audio', 'readwrite', (s) => s.put(f, rec.id)).catch(() => {});
+        return f;
+      }
+    }
+    return null;
+  };
+  S.deleteAudio = async function (rec) {
+    await tx('audio', 'readwrite', (s) => s.delete(rec.id));
+    for (const be of ready()) await be.audioDel(rec).catch(() => {});
+  };
+  /** Morceaux d'un enregistrement en cours (récupération après plantage) */
+  S.addChunk = (recId, lessonId, startedAt, blob) => tx('recchunks', 'readwrite', (s) => s.add({ recId, lessonId, startedAt, blob, at: Date.now() }));
+  S.takeChunks = async function (recId) {
+    const all = await tx('recchunks', 'readonly', (s) => s.getAll());
+    const keys = await tx('recchunks', 'readonly', (s) => s.getAllKeys());
+    const mine = [], mineKeys = [];
+    all.forEach((c, i) => { if (!recId || c.recId === recId) { mine.push(c); mineKeys.push(keys[i]); } });
+    return { chunks: mine, drop: () => tx('recchunks', 'readwrite', (s) => mineKeys.forEach((k) => s.delete(k))) };
+  };
+
+  /* ---------- synchronisation générique ---------- */
+  const locks = new Map();
+  /** Fusion destination <-> navigateur : le plus récent gagne, puis on réécrit là où c'est plus ancien */
+  S.sync = function (be) {
+    const prev = locks.get(be.id) || Promise.resolve();
+    const p = prev.then(() => syncOne(be)).catch((e) => {
+      console.warn('synchro', be.id, e);
+      S.status('Synchro ' + be.label() + ' impossible : ' + e.message, true);
+      return { pulled: 0, pushed: 0, error: e };
+    });
+    locks.set(be.id, p);
+    return p;
+  };
+  async function syncOne(be) {
+    if (!be.ready()) return { pulled: 0, pushed: 0 };
+    await S.flush();
+    const remote = await be.list(); // Map id -> { u, ...ref }
+    const pulled = [], toRemote = [];
+    for (const [id, r] of remote) {
+      const m = S.lessons.get(id);
+      if (!m || (r.u || 0) > (m.updatedAt || 0)) {
+        const l = await be.read(r).catch((e) => { console.warn('illisible', id, e); return null; });
+        if (l && l.id === id && (!m || (l.updatedAt || 0) > (m.updatedAt || 0))) { S.lessons.set(id, l); pulled.push(l); }
+      } else if ((m.updatedAt || 0) > (r.u || 0)) toRemote.push(m);
+    }
+    for (const [id, m] of S.lessons) if (!remote.has(id)) toRemote.push(m);
+    if (pulled.length) await tx('lessons', 'readwrite', (s) => pulled.forEach((l) => s.put(l)));
+    for (const l of toRemote) await be.write(l);
+    // ce qui vient d'arriver est recopié vers les autres destinations (ex. Drive -> dossier du PC)
+    for (const other of ready()) if (other !== be) for (const l of pulled) await other.write(l).catch(() => {});
+    // audio enregistré ici mais absent de la destination : on l'envoie
+    const names = await be.audioNames();
+    for (const l of S.lessons.values()) {
+      if (l.deleted) continue;
+      for (const r of l.recordings || []) {
+        if (names.has(r.file)) continue;
+        const b = await idbAudio(r.id);
+        if (b) await be.audioPut(r, b).catch((e) => console.warn('audio', e));
+      }
+    }
+    if (be.after) await be.after();
+    S.lastSync = Date.now();
+    S.status('Synchronisé · ' + be.label());
+    if (pulled.length) document.dispatchEvent(new CustomEvent('biji:lessons', { detail: { pulled: pulled.map((l) => l.id), from: be.id } }));
+    return { pulled: pulled.length, pushed: toRemote.length };
+  }
+  S.syncAll = async function () {
+    for (const be of ready()) await S.sync(be);
+    document.dispatchEvent(new CustomEvent('biji:sync'));
+  };
+
+  /* ---------- dossier sur le disque ---------- */
   const queues = new Map();
   async function fileHandle(path, create) {
     const parts = path.split('/');
@@ -74,80 +211,48 @@
     queues.set(path, p);
     return p;
   }
-
-  const pending = new Map();
-  const flushSoon = B.debounce(() => S.flush(), 700);
-  /** Marque un cours modifié ; écrit après 700 ms d'inactivité */
-  S.touch = function (lesson) {
-    lesson.updatedAt = Date.now();
-    S.lessons.set(lesson.id, lesson);
-    pending.set(lesson.id, lesson);
-    S.status('Modifications…');
-    flushSoon();
-  };
-  S.flush = async function () {
-    if (B.editor && B.editor.syncDoc) B.editor.syncDoc();
-    const items = [...pending.values()];
-    pending.clear();
-    if (!items.length) return;
-    await tx('lessons', 'readwrite', (s) => items.forEach((l) => s.put(l)));
-    let disk = true;
-    for (const l of items) disk = (await writeFile(l.id + '.json', l)) && disk;
-    S.status(S.dirState === 'granted' && disk ? 'Enregistré dans « ' + S.dir.name + ' »' : 'Enregistré dans le navigateur seulement');
-  };
-  window.addEventListener('pagehide', () => S.flush());
-  document.addEventListener('visibilitychange', () => document.hidden && S.flush());
-
-  S.create = function (fields) {
-    const l = Object.assign({ id: 'c' + B.uid(), v: 2, title: '', date: B.today(), createdAt: Date.now(),
-      doc: null, inks: {}, grids: {}, vocab: [], recordings: [] }, fields);
-    S.touch(l);
-    return l;
-  };
-  S.remove = function (id) {
-    const l = S.lessons.get(id);
-    if (!l) return;
-    S.touch({ id, deleted: true, title: l.title, createdAt: l.createdAt });
-  };
-
-  /* ---------- audio ---------- */
-  S.saveAudio = async function (rec, blob) {
-    await tx('audio', 'readwrite', (s) => s.put(blob, rec.id));
-    const ok = await writeFile('audio/' + rec.file, blob);
-    return ok;
-  };
-  S.getAudio = async function (rec) {
-    const b = await tx('audio', 'readonly', (s) => s.get(rec.id));
-    if (b) return b;
-    if (S.dirState === 'granted') {
-      try {
-        const f = await (await fileHandle('audio/' + rec.file, false)).getFile();
-        tx('audio', 'readwrite', (s) => s.put(f, rec.id)).catch(() => {});
-        return f;
-      } catch (e) { /* absent */ }
-    }
-    return null;
-  };
-  S.deleteAudio = async function (rec) {
-    await tx('audio', 'readwrite', (s) => s.delete(rec.id));
-    if (S.dirState === 'granted') {
+  const folder = {
+    id: 'dir',
+    label: () => 'dossier « ' + (S.dir ? S.dir.name : '') + ' »',
+    ready: () => S.dirState === 'granted' && !!S.dir,
+    async list() {
+      const out = new Map();
+      for await (const [name, h] of S.dir.entries()) {
+        if (h.kind !== 'file' || !/^c[\w]+\.json$/.test(name)) continue;
+        try {
+          const l = JSON.parse(await (await h.getFile()).text());
+          if (l && l.id) out.set(l.id, { u: l.updatedAt || 0, data: l });
+        } catch (e) {
+          console.warn('Fichier illisible ignoré', name, e);
+        }
+      }
+      return out;
+    },
+    read: async (r) => r.data,
+    write: (l) => writeFile(l.id + '.json', l),
+    async audioNames() {
+      const out = new Set();
+      try { for await (const [n] of (await S.dir.getDirectoryHandle('audio')).entries()) out.add(n); } catch (e) { /* pas encore de dossier audio */ }
+      return out;
+    },
+    audioPut: (rec, blob) => writeFile('audio/' + rec.file, blob),
+    async audioGet(rec) {
+      try { return await (await fileHandle('audio/' + rec.file, false)).getFile(); } catch (e) { return null; }
+    },
+    async audioDel(rec) {
       try { await (await S.dir.getDirectoryHandle('audio')).removeEntry(rec.file); } catch (e) { /* déjà absent */ }
-    }
+    },
+    async after() {
+      if (!(await S.dir.getFileHandle('LISEZMOI.txt').catch(() => null))) {
+        await writeFile('LISEZMOI.txt', 'Notes Biji : un fichier JSON par cours, les enregistrements dans audio/. Ne pas renommer les fichiers.\n');
+      }
+    },
   };
-  /** Morceaux d'un enregistrement en cours (récupération après plantage) */
-  S.addChunk = (recId, lessonId, startedAt, blob) => tx('recchunks', 'readwrite', (s) => s.add({ recId, lessonId, startedAt, blob, at: Date.now() }));
-  S.takeChunks = async function (recId) {
-    const all = await tx('recchunks', 'readonly', (s) => s.getAll());
-    const keys = await tx('recchunks', 'readonly', (s) => s.getAllKeys());
-    const mine = [], mineKeys = [];
-    all.forEach((c, i) => { if (!recId || c.recId === recId) { mine.push(c); mineKeys.push(keys[i]); } });
-    return { chunks: mine, drop: () => tx('recchunks', 'readwrite', (s) => mineKeys.forEach((k) => s.delete(k))) };
-  };
+  S.register(folder);
 
-  /* ---------- dossier ---------- */
   S.pickDir = async function () {
     if (!window.showDirectoryPicker) {
-      B.toast('Ce navigateur ne sait pas écrire dans un dossier : utiliser Chrome ou Edge', 5000);
+      B.toast('Ce navigateur ne sait pas écrire dans un dossier : utiliser Chrome ou Edge sur PC (ou la synchro Google Drive)', 5000);
       return false;
     }
     let h;
@@ -174,42 +279,13 @@
     S.dirState = 'none';
     await S.kvSet('dir', null);
   };
+  S.syncFromDir = () => S.sync(folder);
 
-  /** Fusion dossier <-> navigateur : le plus récent gagne, puis on réécrit des deux côtés */
-  S.syncFromDir = async function () {
-    const onDisk = new Map();
-    for await (const [name, h] of S.dir.entries()) {
-      if (h.kind !== 'file' || !/^c[\w]+\.json$/.test(name)) continue;
-      try {
-        const l = JSON.parse(await (await h.getFile()).text());
-        if (l && l.id) onDisk.set(l.id, l);
-      } catch (e) {
-        console.warn('Fichier illisible ignoré', name, e);
-      }
-    }
-    const toIdb = [], toDisk = [];
-    for (const [id, d] of onDisk) {
-      const m = S.lessons.get(id);
-      if (!m || (d.updatedAt || 0) > (m.updatedAt || 0)) { S.lessons.set(id, d); toIdb.push(d); }
-      else if ((m.updatedAt || 0) > (d.updatedAt || 0)) toDisk.push(m);
-    }
-    for (const [id, m] of S.lessons) if (!onDisk.has(id)) toDisk.push(m);
-    if (toIdb.length) await tx('lessons', 'readwrite', (s) => toIdb.forEach((l) => s.put(l)));
-    for (const l of toDisk) await writeFile(l.id + '.json', l);
-    // audio enregistré avant la connexion du dossier : on le recopie
-    for (const l of S.lessons.values()) {
-      for (const r of l.recordings || []) {
-        const b = await tx('audio', 'readonly', (s) => s.get(r.id));
-        if (!b) continue;
-        try { await fileHandle('audio/' + r.file, false); } catch (e) { await writeFile('audio/' + r.file, b); }
-      }
-    }
-    if (!(await S.dir.getFileHandle('LISEZMOI.txt').catch(() => null))) {
-      await writeFile('LISEZMOI.txt', 'Notes Biji : un fichier JSON par cours, les enregistrements dans audio/. Ne pas renommer les fichiers.\n');
-    }
-    S.status('Synchronisé avec « ' + S.dir.name + ' »');
-    document.dispatchEvent(new CustomEvent('biji:lessons'));
-  };
+  /* ---------- synchro périodique (Drive : autres appareils) ---------- */
+  const auto = () => { if (!document.hidden && S.backends.some((b) => b.id !== 'dir' && b.ready())) S.syncAll(); };
+  setInterval(auto, 45000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(auto, 300); });
+  window.addEventListener('online', () => setTimeout(auto, 1000));
 
   /* ---------- export / import (sauvegarde manuelle, sans l'audio) ---------- */
   S.exportAll = function () {
