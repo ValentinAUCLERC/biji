@@ -111,6 +111,17 @@ import { pinyin as pinyinPro } from 'pinyin-pro';
     }
   };
 
+  /** Caractère courant qui se lit s+t (pour faire entendre une syllabe à la voix) : {ch, py, exact}. t = 0 : ton libre. */
+  lex.charFor = function (s, t) {
+    const list = (lex.bySyl.get(s) || []).filter((x) => [...x.w].length === 1);
+    if (!list.length) return null;
+    const tone = (x) => +(x.e.p.match(/([1-5])$/) || [0, 5])[1];
+    const main = (x) => pinyinPro(x.w, { toneType: 'num', v: true }).replace(/0$/, '5');
+    const pick = (t && (list.find((x) => tone(x) === t && main(x) === s + t) || list.find((x) => tone(x) === t)))
+      || list.find((x) => main(x) === s + tone(x)) || list[0];
+    return { ch: pick.w, py: B.numToMarks(pick.e.p.toLowerCase()), exact: !t || tone(pick) === t };
+  };
+
   /** Pinyin d'un mot pour le vocab : lecture du dictionnaire qui colle au contexte, sinon pinyin-pro */
   lex.bestReading = function (word, ctxPy) {
     const auto = ctxPy || lex.pinyinRun(word).join(' ');

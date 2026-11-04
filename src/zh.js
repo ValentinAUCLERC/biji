@@ -78,16 +78,15 @@ function decosFor(doc) {
       if (cache.size > 4000) cache.clear();
     }
     for (const c of a) {
+      // --L = nombre de lettres : le CSS élargit le caractère selon la taille du pinyin (réglable) pour éviter les chevauchements
       const L = c.py.length;
-      // pinyin à 0,52 em ≈ 0,3 em par lettre : on élargit le caractère pour que les syllabes ne se chevauchent pas
-      const pad = Math.min(0.5, Math.max(0, (L * 0.32 + 0.3 - 1) / 2));
       decos.push(Decoration.inline(pos + 1 + c.from, pos + 1 + c.to, {
         nodeName: 'span',
         class: 'hz t' + B.toneOf(c.py) + (c.wi === 0 ? ' ws' : '') + (c.wi === [...c.w].length - 1 ? ' we' : '') + (c.fixed ? ' fixed' : ''),
         'data-py': c.py,
         'data-w': c.w,
         'data-wi': String(c.wi),
-        style: pad > 0.02 ? `padding:0 ${pad.toFixed(2)}em` : null,
+        style: L > 1 ? `--L:${L}` : null,
       }));
     }
     return false;

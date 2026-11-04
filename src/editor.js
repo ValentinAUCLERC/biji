@@ -546,16 +546,44 @@ function selBubble(from, to, text) {
         B.h('button', { title: 'Remplacer les caractères par leur pinyin', onclick: () => replace(B.lex.pinyinRun(text).join(' ').replace(/\s+([，。？！、])/g, '$1')) }, '→ pīnyīn')));
   } else if (/^[a-zA-ZāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜüÜ1-5'\s-]+$/.test(text)) {
     if (!B.lex.ready) { B.lex.load(); return; }
-    const cands = B.ime.convertText(text);
-    if (!cands.length) return hideBubble();
-    bubble.replaceChildren(
-      B.h('div.bt', 'Pinyin → 汉字 : choisir pour remplacer « ' + text + ' »'),
-      B.h('div.bc', ...cands.map((c) => B.h('button.ic', { lang: 'zh-CN', onclick: () => replace(c.w) },
-        B.h('span.w', c.w), B.h('span.g', c.e ? B.lex.shortGloss(c.w, c.e) : '')))));
+    pinyinBubble(text, replace);
   } else return hideBubble();
   const r1 = ed.view.coordsAtPos(from), r2 = ed.view.coordsAtPos(to);
   placeBubble({ left: Math.min(r1.left, r2.left), width: Math.abs(r2.right - r1.left), top: r1.top - 14, bottom: r2.bottom });
 }
+/** Bulle sur du pinyin sélectionné : l'écouter (même sans caractère), puis le remplacer par des hanzi qui se lisent exactement ainsi */
+function pinyinBubble(text, replace) {
+  const I = B.ime;
+  const r = I.syllabify(text);
+  const listen = (txt, slow) => B.h('button.icon', { title: slow ? 'Écouter lentement' : 'Écouter', onclick: () => B.voice.speak(txt, slow) }, slow ? '🐢' : '🔊');
+  const candBtn = (c) => B.h('button.ic', { lang: 'zh-CN', title: c.py, onclick: () => replace(c.w) },
+    B.h('span.w', c.w), pyEl(c.py), B.h('span.g', c.e ? B.lex.shortGloss(c.w, c.e) : ''));
+  if (r.bad) {
+    // pas du pinyin : « rō » (transcription à la française) -> syllabes réelles proches, à écouter
+    const plain = B.plainSyl(r.bad).replace(/ü/g, 'v').replace(/[^a-z]/g, '');
+    const t = [...r.bad.normalize('NFC')].map((c) => (B.plainSyl(c) !== c.toLowerCase() ? B.toneOf(c) : 0)).find((x) => x) || +(r.bad.match(/[1-5]$/) || [0, 0])[1];
+    const near = I.nearSyllables(plain).map((s) => ({ s, rep: B.lex.charFor(s, t) })).filter((x) => x.rep);
+    bubble.replaceChildren(
+      B.h('div.bt', '« ' + r.bad + ' » n’est pas une syllabe du chinois : aucun caractère ne se lit ainsi.'),
+      near.length ? B.h('div.bt', 'Syllabes proches, cliquer pour écouter :') : null,
+      B.h('div.bc', ...near.map(({ rep }) => B.h('button.ic.near', { title: 'Écouter ' + rep.ch + ' (' + rep.py + ')', onclick: () => B.voice.speak(rep.ch) },
+        pyEl(rep.py), B.h('span.g', '🔊 ' + rep.ch)))));
+    return;
+  }
+  const syls = r.syls;
+  const shown = syls.map((x) => (x.t ? B.markSyllable(x.s.replace(/v/g, 'ü'), x.t) : x.s.replace(/v/g, 'ü'))).join(' ');
+  const { toned, exact, other } = I.readingCands(syls);
+  const snd = I.soundFor(syls, exact);
+  bubble.replaceChildren(...[
+    B.h('div.bw', B.h('span.pybig', pyEl(shown)), snd ? listen(snd.text) : null, snd ? listen(snd.text, true) : null),
+    snd ? B.h('div.bt', 'La voix lit ' + snd.text + (snd.approx ? ' (aucun caractère courant avec exactement ce ton : son le plus proche)' : '')) : null,
+    exact.length
+      ? [B.h('div.bt', (toned ? 'Se lit exactement « ' + shown + ' »' : 'Se lit « ' + shown + ' » (sans ton précisé)') + ' : choisir pour remplacer'),
+        B.h('div.bc', ...exact.map(candBtn))]
+      : B.h('div.bt', 'Aucun mot ne se lit exactement « ' + shown + ' ».'),
+    other.length ? [B.h('div.bt.other', 'Même son, autre ton :'), B.h('div.bc.other', ...other.map(candBtn))] : null].flat());
+}
+
 function onDocClick(e) {
   const st = e.target.closest('.stamp');
   if (st) { e.preventDefault(); B.rec.playAt(st.dataset.stamp, +st.dataset.t); return; }

@@ -145,6 +145,25 @@ function serve(dir) {
   txt = await ev(() => Biji.editor.editor.getText());
   ok(txt.trim().endsWith('中国'), 'pinyin remplacé par 中国');
 
+  /* ---- pinyin accentué : ton respecté, écoute, syllabe inexistante ---- */
+  await ev(() => { window.__spoken = []; speechSynthesis.speak = (u) => window.__spoken.push(u.text); });
+  const selEnd = (t) => ev((t) => { const ed = Biji.editor.editor; ed.chain().focus('end').insertContent('<p>' + t + '</p>').run(); const end = ed.state.doc.content.size - 1; ed.commands.setTextSelection({ from: end - t.length, to: end }); }, t);
+  await selEnd('mā');
+  await p.waitForSelector('#bubble:not([hidden]) .pybig');
+  const exact = await p.$$eval('#bubble .bc:not(.other) .ic .py', (e) => e.map((x) => x.textContent));
+  ok(exact.length && exact.every((x) => x === 'mā'), 'sélection « mā » : seuls les mots en mā en premier : ' + exact.join(' '));
+  ok(await p.$('#bubble .bc.other .ic') != null, '« même son, autre ton » séparé');
+  await p.click('#bubble .bw button.icon');
+  ok((await ev(() => window.__spoken))[0] === '妈', 'écouter « mā » → la voix lit 妈');
+  await selEnd('rō');
+  await p.waitForSelector('#bubble:not([hidden]) .ic.near');
+  ok(/n’est pas une syllabe/.test(await p.$eval('#bubble', (e) => e.textContent)), '« rō » : signalé comme non-pinyin');
+  await p.click('#bubble .ic.near');
+  ok((await ev(() => window.__spoken)).length === 2, '« rō » : syllabes proches à écouter');
+  await ev(() => { const ed = Biji.editor.editor; const d = ed.state.doc; const n = d.child(d.childCount - 1).nodeSize + d.child(d.childCount - 2).nodeSize;
+    ed.chain().deleteRange({ from: d.content.size - n, to: d.content.size }).setTextSelection(1).run(); });
+  await p.keyboard.press('Escape');
+
   /* ---- clic sur un mot : bulle + vocabulaire + fiche ---- */
   await clickAt('.hz[data-w="学生"]');
   await p.waitForSelector('#bubble[data-mode="word"]:not([hidden])');

@@ -152,6 +152,78 @@
     return I.candidates(plain, true).filter((c) => c.consume === plain.length).slice(0, 8);
   };
 
+  /** Pinyin déjà écrit -> syllabes {s:'ma', t:1} (t = 0 si ton non précisé). {bad:'rō'} si un morceau n'est pas du pinyin. */
+  I.syllabify = function (text) {
+    const syls = [];
+    for (const tok of text.normalize('NFC').split(/[\s\-·'’]+/).filter(Boolean)) {
+      const re = /([^\d]+)([1-5]?)|(\d)/g;
+      let m;
+      while ((m = re.exec(tok))) {
+        if (m[3]) return { bad: tok };
+        const letters = [], tones = [];
+        for (const c of m[1]) {
+          if (c === 'v' || c === 'V') { letters.push('v'); tones.push(0); continue; }
+          const p = B.plainSyl(c);
+          letters.push(p === 'ü' ? 'v' : p);
+          tones.push(p !== c.toLowerCase() ? B.toneOf(c) : 0);
+        }
+        const key = letters.join('');
+        const segs = SYL.has(key) ? [{ s: key, a: 0, b: key.length }] : segmentations(key).find((sg) => !sg[sg.length - 1].partial);
+        if (!segs) return { bad: m[0] };
+        segs.forEach((x, i) => {
+          let t = tones.slice(x.a, x.b).find((v) => v) || 0;
+          if (m[2] && i === segs.length - 1) t = +m[2];
+          syls.push({ s: x.s, t });
+        });
+      }
+    }
+    return syls.length ? { syls } : { bad: text };
+  };
+
+  const tonesOf = (c) => (c.e ? c.e.p.split(' ').map((x) => +(x.match(/([1-5])$/) || [0, 5])[1]) : B.lex.pinyinRun(c.w).map(B.toneOf));
+  /** Mots qui se lisent exactement comme les syllabes (ton compris quand il est donné), puis même son / autre ton */
+  I.readingCands = function (syls) {
+    const buf = syls.map((x) => x.s).join("'");
+    const all = I.candidates(buf, true).filter((c) => c.consume === buf.length).slice(0, 60);
+    const toned = syls.some((x) => x.t);
+    const exact = [], other = [];
+    for (const c of all) {
+      const ts = tonesOf(c);
+      const py = c.e ? B.numToMarks(c.e.p.toLowerCase()) : B.lex.pinyinRun(c.w).join(' ');
+      const item = { w: c.w, e: c.e, py };
+      (!toned || syls.every((x, i) => !x.t || x.t === ts[i]) ? exact : other).push(item);
+    }
+    return { toned, exact: exact.slice(0, 12), other: other.slice(0, 8) };
+  };
+
+  /** Ce que la voix lit pour faire entendre ces syllabes : le mot exact s'il existe, sinon un caractère courant par syllabe */
+  I.soundFor = function (syls, exact) {
+    if (exact.length && syls.length > 1) return { text: exact[0].w, approx: false };
+    const reps = syls.map((x) => B.lex.charFor(x.s, x.t));
+    if (reps.some((r) => !r)) return null;
+    return { text: reps.map((r) => r.ch).join(''), approx: reps.some((r) => !r.exact) };
+  };
+
+  /** Vraies syllabes proches d'une syllabe inexistante (« ro » -> rou, rong, ruo, re…) */
+  I.nearSyllables = function (plain, max = 8) {
+    const ini = (s) => (s.match(/^(zh|ch|sh|[bpmfdtnlgkhjqxrzcsyw])/) || [''])[0];
+    const lev1 = (a, b) => {
+      if (Math.abs(a.length - b.length) > 1) return false;
+      let i = 0;
+      while (i < a.length && a[i] === b[i]) i++;
+      return a.slice(i + 1) === b.slice(i + 1) || a.slice(i) === b.slice(i + 1) || a.slice(i + 1) === b.slice(i);
+    };
+    const out = [];
+    for (const v of SYL) {
+      if (v === plain) continue;
+      let sc = null;
+      if (v.startsWith(plain)) sc = 0;
+      else if (lev1(v, plain)) sc = ini(v) === ini(plain) ? 1 : 2;
+      if (sc != null) out.push({ v, sc });
+    }
+    return out.sort((a, b) => a.sc - b.sc || a.v.length - b.v.length || a.v.localeCompare(b.v)).slice(0, max).map((x) => x.v);
+  };
+
   /* ---------------- interface ---------------- */
   let box = null;
   function ensureBox() {

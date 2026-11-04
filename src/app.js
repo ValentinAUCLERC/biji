@@ -2,11 +2,12 @@
 (function () {
   const B = window.Biji;
   const A = (B.app = {});
-  const DEFAULTS = { pinyin: 'show', toneColors: true, fingerDraw: false, toneConv: true, voice: '', ime: false, onlineHw: true };
+  const DEFAULTS = { pinyin: 'show', pySize: 'm', toneColors: true, fingerDraw: false, toneConv: true, voice: '', ime: false, onlineHw: true };
   B.settings = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('biji.settings') || '{}'));
   A.saveSettings = () => { localStorage.setItem('biji.settings', JSON.stringify(B.settings)); applySettings(); };
   function applySettings() {
     document.body.dataset.pinyin = B.settings.pinyin;
+    document.body.dataset.pysize = B.settings.pySize;
     document.body.classList.toggle('tones', !!B.settings.toneColors);
   }
 
@@ -181,6 +182,8 @@
       B.h('h2', 'Affichage'),
       row('Pinyin ', B.h('select', { onchange: (e) => { st.pinyin = e.target.value; A.saveSettings(); B.$('#pinbtn').textContent = PIN[st.pinyin]; } },
         ...[['show', 'affiché'], ['hover', 'caché, visible au survol'], ['hide', 'masqué']].map(([v, t]) => B.h('option', { value: v, selected: st.pinyin === v }, t)))),
+      row('Taille du pinyin ', B.h('select', { onchange: (e) => { st.pySize = e.target.value; A.saveSettings(); } },
+        ...[['s', 'petite'], ['m', 'normale'], ['l', 'grande']].map(([v, t]) => B.h('option', { value: v, selected: st.pySize === v }, t)))),
       row(['Couleurs des tons ', chk('toneColors')], null, 'Ton 1 rouge, 2 vert, 3 bleu, 4 violet, neutre gris.'),
       B.h('h2', 'Saisie'),
       row(['Saisie pinyin → 汉字 activée à l’ouverture ', chk('ime', () => B.ime.toggle(st.ime))], null, 'Bascule à tout moment avec Maj (appui seul) ou le bouton « 中 / FR ». Espace = 1er choix, 1-9 = choix, Entrée = garder les lettres, l’apostrophe sépare les syllabes (xi’an → 西安).'),
