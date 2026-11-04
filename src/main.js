@@ -5,6 +5,7 @@ import './ime.js';
 import './store.js';
 import './gdrive.js';
 import './ink.js';
+import './media.js';
 import './zh.js';
 import './pad.js';
 import './rec.js';

@@ -7,3 +7,4 @@ site/app.js.map
 site/app.js.LEGAL.txt
 site/sw.js
 site/build.js
+site/vendor/pdfjs/

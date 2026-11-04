@@ -136,6 +136,7 @@ B.docText = function (doc) {
     if (!n) return;
     if (n.type === 'text') out.push(n.text);
     if (n.type === 'grid' && n.attrs) out.push(' ' + (n.attrs.chars || '') + ' ');
+    if (n.type === 'pic' && n.attrs) out.push(' ' + (n.attrs.cap || '') + '\n' + (n.attrs.text || '') + '\n');
     (n.content || []).forEach(walk);
     if (n.type && /paragraph|heading|tableCell|tableHeader|listItem/.test(n.type)) out.push('\n');
   };

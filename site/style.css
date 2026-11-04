@@ -382,3 +382,16 @@ pre.pentest { font: 13px/1.5 ui-monospace, Consolas, monospace; background: #f6e
 /* mode stylet d'abord */
 body.penfirst.pen-selecting { cursor: text; }
 body.penfirst .inkc { cursor: crosshair; }
+
+/* images / pages de PDF annotables */
+.nv-pic .inkc.picc { background: #fff; }
+.nv-pic .nvl { font-weight: 600; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fmtbar .pop .pophint { margin: 4px 8px 2px; font: 12px/1.35 var(--ui); color: var(--muted); max-width: 260px; }
+#pdfdlg { border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; max-width: min(440px, 92vw); background: var(--sheet, #fffefa); color: inherit; }
+#pdfdlg::backdrop { background: #0005; }
+#pdfdlg h3 { margin: 0 0 8px; font: 600 17px var(--ui); }
+#pdfdlg p { margin: 6px 0; font: 14px/1.45 var(--ui); }
+#pdfdlg label { display: flex; gap: 8px; align-items: center; font: 14px var(--ui); margin-top: 10px; }
+#pdfdlg input { flex: 1; min-height: 36px; font-size: 16px; }
+#pdfdlg .err { color: var(--red); }
+#pdfdlg .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

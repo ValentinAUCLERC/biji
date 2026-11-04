@@ -94,6 +94,98 @@ const InkNode = Node.create({
   },
 });
 
+/** Image ou page de PDF annotable : image (magasin d'images) + traits par-dessus (lesson.inks[id]) */
+const PicNode = Node.create({
+  name: 'pic',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: false,
+  addAttributes: () => ({ id: { default: null }, file: { default: '' }, w: { default: 1000 }, h: { default: 700 }, cap: { default: '' }, text: { default: '' } }),
+  parseHTML: () => [{ tag: 'div[data-pic]', getAttrs: (el) => ({ id: el.getAttribute('data-ink'), file: el.getAttribute('data-pic'),
+    w: +el.getAttribute('data-w') || 1000, h: +el.getAttribute('data-h') || 700, cap: el.getAttribute('data-cap') || '' }) }],
+  renderHTML: ({ HTMLAttributes: a }) => ['div', { 'data-pic': a.file, 'data-ink': a.id, 'data-w': a.w, 'data-h': a.h, 'data-cap': a.cap }],
+  addNodeView() {
+    return ({ node, getPos, editor }) => {
+      let cur = node;
+      const L = E.lesson;
+      const id = node.attrs.id;
+      if (!L.inks[id]) L.inks[id] = [];
+      const { dom, gut } = nodeShell('nv-pic', '🖼 ' + (node.attrs.cap || 'Image'));
+      const cv = B.h('canvas.inkc.picc');
+      const lh = () => (1000 * cur.attrs.h) / cur.attrs.w;
+      let img = null, state = 'loading';
+      const ink = new B.Ink(cv, {
+        lw: 1000, lh, strokes: L.inks[id],
+        bg: (ctx, s, w, hh) => {
+          if (img) { ctx.drawImage(img, 0, 0, w, hh); return; }
+          ctx.fillStyle = '#f3efe6';
+          ctx.fillRect(0, 0, w, hh);
+          ctx.fillStyle = '#8a8170';
+          ctx.font = 15 + 'px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(state === 'loading' ? 'Chargement de l’image…' : 'Image pas encore disponible sur cet appareil (synchro en attente)', w / 2, hh / 2);
+        },
+        onChange: save,
+        onStart: () => {},
+      });
+      E.inks.push(ink);
+      const load = () => B.store.getImage(cur.attrs.file).then(async (b) => {
+        if (!b) { state = 'missing'; ink.redraw(); return; }
+        try { img = await createImageBitmap(b); } catch (e) { const u = URL.createObjectURL(b); const i = new Image(); i.src = u; await i.decode(); img = i; }
+        state = 'ok';
+        if (cv.isConnected) ink.redraw();
+      }).catch(() => { state = 'missing'; ink.redraw(); });
+      load();
+      // image arrivée plus tard (synchro) : on réessaie quand on revient sur l'onglet / après une synchro
+      const retry = () => { if (state === 'missing') { state = 'loading'; load(); } };
+      document.addEventListener('biji:synced', retry);
+      gut.append(
+        B.h('button', { title: 'Annuler le dernier trait', onclick: () => ink.undo() }, '↶'),
+        B.h('button', { title: 'Effacer toutes les annotations de cette image', onclick: () => {
+          if (!L.inks[id].length || !confirm('Effacer toutes les annotations de cette image ?')) return;
+          L.inks[id].splice(0);
+          ink.redraw();
+          save();
+        } }, 'Tout effacer'),
+        delBtn(getPos, editor, () => cur, () => true));
+      dom.append(cv);
+      return {
+        dom,
+        update(n) {
+          if (n.type !== cur.type || n.attrs.id !== id) return false;
+          const fileChanged = n.attrs.file !== cur.attrs.file;
+          cur = n;
+          if (fileChanged) { img = null; state = 'loading'; load(); }
+          ink.layout();
+          return true;
+        },
+        stopEvent: (e) => !/^drag|^drop/.test(e.type) && e.target !== dom,
+        ignoreMutation: () => true,
+        destroy() { document.removeEventListener('biji:synced', retry); ink.destroy(); E.inks = E.inks.filter((i) => i !== ink); if (img && img.close) img.close(); },
+      };
+    };
+  },
+});
+
+/** Insère des images / pages de PDF (fichiers choisis, collés ou déposés) à la position pos (ou au curseur) */
+E.insertMedia = async function (files, pos) {
+  files = [...files].filter(B.media.isMedia);
+  if (!files.length || !E.editor) return false;
+  const ed = E.editor;
+  const at = pos == null ? null : ed.state.doc.resolve(Math.min(pos, ed.state.doc.content.size));
+  const pics = await B.media.fromFiles(files);
+  if (!pics.length || !E.editor || E.editor !== ed) return false;
+  const content = [];
+  for (const a of pics) content.push({ type: 'pic', attrs: a });
+  content.push({ type: 'paragraph' });
+  const chain = ed.chain().focus();
+  if (at) chain.insertContentAt(at.depth ? at.after(1) : at.pos, content);
+  else chain.insertContent(content);
+  chain.scrollIntoView().run();
+  return true;
+};
+
 /** Cases 田 d'entraînement : modèle + cases (tracés dans lesson.grids[id]) */
 const GridNode = Node.create({
   name: 'grid',
@@ -288,13 +380,30 @@ E.open = function (lesson) {
       TextStyle, Color,
       Highlight.configure({ multicolor: true }),
       Placeholder.configure({ placeholder: ({ node }) => node.type.name === 'paragraph' ? 'Écrire ici… Maj seule : basculer pinyin→汉字 / clavier français. « ni3 » → « nǐ ».' : '' }),
-      PinyinFix, PinyinDisplay, InkNode, GridNode, StampNode,
+      PinyinFix, PinyinDisplay, InkNode, PicNode, GridNode, StampNode,
     ],
     content: lesson.doc,
     editorProps: {
       attributes: { class: 'zh-doc', spellcheck: 'false' },
       handleKeyDown: (view, e) => B.ime.handleKey(e, imeAdapter),
       handleTextInput: (view, from, to, text) => toneInput(view, from, to, text),
+      // coller une capture / déposer une photo ou un PDF -> bloc image annotable
+      handlePaste: (view, e) => {
+        const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter(B.media.isMedia);
+        if (!files.length) return false;
+        e.preventDefault();
+        E.insertMedia(files);
+        return true;
+      },
+      handleDrop: (view, e, slice, moved) => {
+        if (moved) return false;
+        const files = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter(B.media.isMedia);
+        if (!files.length) return false;
+        e.preventDefault();
+        const r = view.posAtCoords({ left: e.clientX, top: e.clientY });
+        E.insertMedia(files, r ? r.pos : null);
+        return true;
+      },
       handleDOMEvents: {
         blur: () => { B.ime.cancel(); return false; },
         focus: () => { B.target = null; return false; },
@@ -326,7 +435,7 @@ E.syncDoc = function () {
 };
 function cleanOrphans(l) {
   const used = new Set();
-  const walk = (n) => { if (n.attrs && n.attrs.id && (n.type === 'ink' || n.type === 'grid')) used.add(n.attrs.id); (n.content || []).forEach(walk); };
+  const walk = (n) => { if (n.attrs && n.attrs.id && (n.type === 'ink' || n.type === 'grid' || n.type === 'pic')) used.add(n.attrs.id); (n.content || []).forEach(walk); };
   walk(l.doc);
   for (const k of Object.keys(l.inks || {})) if (!used.has(k)) delete l.inks[k];
   for (const k of Object.keys(l.grids || {})) if (!used.has(k)) delete l.grids[k];
@@ -424,6 +533,10 @@ function fmtBar() {
       B.h('button', { onclick: () => E.editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() }, 'Insérer 3 × 3'),
       B.h('button', { onclick: () => E.editor.chain().focus().insertTable({ rows: 5, cols: 4, withHeaderRow: true }).run() }, 'Insérer 5 × 4 (vocabulaire : 汉字 / pinyin / sens / exemple)')]),
     btn('✏ Dessin', 'Zone de dessin au stylet', (x) => x.insertContent([{ type: 'ink', attrs: { id: 'i' + B.uid(), h: 360 } }, { type: 'paragraph' }])),
+    menu('🖼 Image / PDF', 'Image ou PDF à annoter au stylet', [
+      B.h('button', { onclick: () => pickMedia(false) }, 'Depuis un fichier (image ou PDF)…'),
+      B.h('button', { onclick: () => pickMedia(true) }, '📷 Prendre en photo'),
+      B.h('p.pophint', 'Ou coller une capture (Ctrl+V) / glisser-déposer un fichier dans la page')]),
     btn('田 Cases', 'Cases d’entraînement à l’écriture', (x) => x.insertContent([{ type: 'grid', attrs: { id: 'g' + B.uid(), chars: selectedHan(), reps: 7 } }, { type: 'paragraph' }])),
     B.h('button', { 'data-act': 'stamp', hidden: B.rec.state === 'idle', title: 'Repère audio : réécouter plus tard ce passage (Alt+M)', onclick: () => E.insertStamp() }, '⏱ Repère'),
     B.h('span.grow'),
@@ -441,6 +554,12 @@ function fmtBar() {
   // les boutons ne prennent pas le focus : le curseur reste dans le texte
   bar.addEventListener('mousedown', (e) => { if (!e.target.closest('input,select')) e.preventDefault(); });
   return bar;
+}
+function pickMedia(camera) {
+  const inp = B.h('input', { type: 'file', accept: camera ? 'image/*' : 'image/*,application/pdf,.pdf', multiple: !camera, capture: camera ? 'environment' : null, hidden: true });
+  inp.addEventListener('change', () => { if (inp.files.length) E.insertMedia(inp.files); inp.remove(); });
+  document.body.appendChild(inp);
+  inp.click();
 }
 function selectedHan() {
   const ed = E.editor;

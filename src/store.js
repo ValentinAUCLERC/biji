@@ -1,7 +1,8 @@
 /* Biji — stockage : IndexedDB (toujours) + destinations synchronisées (« backends ») :
  *   - dossier sur le disque (File System Access, Chrome/Edge PC)
  *   - Google Drive (gdrive.js) pour téléphone, tablette, autres PC
- * Un cours = un fichier <id>.json ; les enregistrements audio vont dans audio/<fichier>.webm.
+ * Un cours = un fichier <id>.json ; les enregistrements audio vont dans audio/<fichier>.webm,
+ * les images et pages de PDF annotables dans images/<fichier>.webp|jpg.
  * Le plus récent (updatedAt) gagne à la fusion. Suppression = « pierre tombale » {id, deleted:true}.
  */
 (function () {
@@ -11,13 +12,14 @@
   let dbp = null;
   function db() {
     return (dbp = dbp || new Promise((res, rej) => {
-      const q = indexedDB.open('biji', 2);
+      const q = indexedDB.open('biji', 3);
       q.onupgradeneeded = () => {
         const d = q.result;
         if (!d.objectStoreNames.contains('lessons')) d.createObjectStore('lessons', { keyPath: 'id' });
         if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
         if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio');
         if (!d.objectStoreNames.contains('recchunks')) d.createObjectStore('recchunks', { autoIncrement: true });
+        if (!d.objectStoreNames.contains('images')) d.createObjectStore('images');
       };
       q.onsuccess = () => res(q.result);
       q.onerror = () => rej(q.error);
@@ -36,6 +38,15 @@
   S.kvGet = (k) => tx('kv', 'readonly', (s) => s.get(k));
   S.kvSet = (k, v) => tx('kv', 'readwrite', (s) => s.put(v, k));
   const idbAudio = (id) => tx('audio', 'readonly', (s) => s.get(id));
+  const idbImage = (file) => tx('images', 'readonly', (s) => s.get(file));
+  /** Fichiers image utilisés par un cours (blocs « pic » du document) */
+  const picsOf = (l) => {
+    const out = [];
+    const walk = (n) => { if (!n) return; if (n.type === 'pic' && n.attrs && n.attrs.file) out.push(n.attrs.file); (n.content || []).forEach(walk); };
+    walk(l.doc);
+    return out;
+  };
+  S.picsOf = picsOf;
 
   /** Destination synchronisée : { id, label(), ready(), list(), read(ref), write(lesson), audioNames(), audioPut(rec, blob), audioGet(rec), audioDel(rec) } */
   S.register = (be) => { S.backends.push(be); };
@@ -125,6 +136,32 @@
     await tx('audio', 'readwrite', (s) => s.delete(rec.id));
     for (const be of ready()) await be.audioDel(rec).catch(() => {});
   };
+  /* ---------- images (photos, captures, pages de PDF) ---------- */
+  S.saveImage = async function (file, blob) {
+    await tx('images', 'readwrite', (s) => s.put(blob, file));
+    for (const be of ready()) {
+      if (!be.imgPut) continue;
+      const p = be.imgPut(file, blob).catch((e) => { console.warn(be.id, e); return false; });
+      if (be.id === 'dir') await p;
+    }
+  };
+  const fetching = new Map();
+  S.getImage = function (file) {
+    if (!fetching.has(file)) {
+      fetching.set(file, (async () => {
+        const b = await idbImage(file);
+        if (b) return b;
+        for (const be of ready()) {
+          if (!be.imgGet) continue;
+          const f = await be.imgGet(file).catch(() => null);
+          if (f) { await tx('images', 'readwrite', (s) => s.put(f, file)).catch(() => {}); return f; }
+        }
+        return null;
+      })().finally(() => setTimeout(() => fetching.delete(file), 0)));
+    }
+    return fetching.get(file);
+  };
+
   /** Morceaux d'un enregistrement en cours (récupération après plantage) */
   S.addChunk = (recId, lessonId, startedAt, blob) => tx('recchunks', 'readwrite', (s) => s.add({ recId, lessonId, startedAt, blob, at: Date.now() }));
   S.takeChunks = async function (recId) {
@@ -175,9 +212,22 @@
         if (b) await be.audioPut(r, b).catch((e) => console.warn('audio', e));
       }
     }
+    // images présentes ici mais absentes de la destination : on les envoie
+    if (be.imgNames) {
+      const inames = await be.imgNames();
+      for (const l of S.lessons.values()) {
+        if (l.deleted) continue;
+        for (const f of picsOf(l)) {
+          if (inames.has(f)) continue;
+          const b = await idbImage(f);
+          if (b) { await be.imgPut(f, b).catch((e) => console.warn('image', e)); inames.add(f); }
+        }
+      }
+    }
     if (be.after) await be.after();
     S.lastSync = Date.now();
     S.status('Synchronisé · ' + be.label());
+    document.dispatchEvent(new CustomEvent('biji:synced', { detail: { from: be.id } }));
     if (pulled.length) document.dispatchEvent(new CustomEvent('biji:lessons', { detail: { pulled: pulled.map((l) => l.id), from: be.id } }));
     return { pulled: pulled.length, pushed: toRemote.length };
   }
@@ -242,9 +292,18 @@
     async audioDel(rec) {
       try { await (await S.dir.getDirectoryHandle('audio')).removeEntry(rec.file); } catch (e) { /* déjà absent */ }
     },
+    async imgNames() {
+      const out = new Set();
+      try { for await (const [n] of (await S.dir.getDirectoryHandle('images')).entries()) out.add(n); } catch (e) { /* pas encore de dossier images */ }
+      return out;
+    },
+    imgPut: (file, blob) => writeFile('images/' + file, blob),
+    async imgGet(file) {
+      try { return await (await fileHandle('images/' + file, false)).getFile(); } catch (e) { return null; }
+    },
     async after() {
       if (!(await S.dir.getFileHandle('LISEZMOI.txt').catch(() => null))) {
-        await writeFile('LISEZMOI.txt', 'Notes Biji : un fichier JSON par cours, les enregistrements dans audio/. Ne pas renommer les fichiers.\n');
+        await writeFile('LISEZMOI.txt', 'Notes Biji : un fichier JSON par cours, les enregistrements dans audio/, les images dans images/. Ne pas renommer les fichiers.\n');
       }
     },
   };
@@ -288,9 +347,15 @@
   window.addEventListener('online', () => setTimeout(auto, 1000));
 
   /* ---------- export / import (sauvegarde manuelle, sans l'audio) ---------- */
-  S.exportAll = function () {
-    S.flush();
-    const data = { app: 'biji', version: 2, exportedAt: new Date().toISOString(), lessons: [...S.lessons.values()] };
+  const toDataUrl = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+  S.exportAll = async function () {
+    await S.flush();
+    const images = {};
+    for (const l of S.lessons.values()) {
+      if (l.deleted) continue;
+      for (const f of picsOf(l)) if (!images[f]) { const b = await S.getImage(f).catch(() => null); if (b) images[f] = await toDataUrl(b); }
+    }
+    const data = { app: 'biji', version: 2, exportedAt: new Date().toISOString(), lessons: [...S.lessons.values()], images };
     const a = B.h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' })), download: 'biji-sauvegarde-' + B.today() + '.json' });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -298,6 +363,10 @@
   S.importFile = async function (file) {
     const data = JSON.parse(await file.text());
     if (!data || data.app !== 'biji' || !Array.isArray(data.lessons)) throw new Error('Ce fichier n’est pas une sauvegarde Biji');
+    for (const [f, url] of Object.entries(data.images || {})) {
+      if (!/^[\w.-]+$/.test(f) || (await idbImage(f))) continue;
+      await S.saveImage(f, await (await fetch(url)).blob()).catch((e) => console.warn('image importée', f, e));
+    }
     let n = 0;
     for (const l of data.lessons) {
       const m = S.lessons.get(l.id);

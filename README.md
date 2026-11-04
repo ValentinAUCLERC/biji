@@ -18,6 +18,9 @@ Une fois visité, il marche hors ligne.
   entiers, désactivable) avec repli hors ligne (HanziLookupJS, un caractère par case).
 - **Dessin libre** au stylet (pression, surligneur, gomme). Le **bout gomme du stylet** efface. Le doigt fait défiler,
   la paume est ignorée. Une zone de test du stylet est dans Réglages.
+- **Images et PDF annotables** (🖼 Image / PDF, Ctrl+V d'une capture, glisser-déposer, 📷 photo sur téléphone) :
+  l'image devient un bloc où dessiner au stylet par-dessus. Photos réduites à 2000 px (WebP), rangées dans `images/`
+  (dossier et Drive), pas dans le JSON du cours. PDF : choix des pages, chaque page = un bloc, texte gardé pour la recherche.
 - **Mode stylet d'abord** (bouton ✒ Stylet ou Réglages) : seul le stylet dessine (souris et doigt ne tracent plus) ;
   hors des dessins, glisser le stylet fait défiler la page (avec élan), toucher place le curseur,
   appui maintenu ½ s puis glisser sélectionne du texte.
@@ -66,6 +69,7 @@ npm test          # bout en bout : playwright-core + chromium, stylet et micro s
 node tests/ime-engine.mjs   # moteur pinyin -> 汉字
 node tests/cloud.js         # synchro Google Drive PC <-> téléphone contre un faux Drive local
 node tests/penfirst.js      # mode « stylet d’abord » (défilement au stylet, souris sans dessin)
+node tests/media.js         # images / PDF annotables (fichier, collage, dépôt, PDF, export/import)
 ```
 
 `site/data/` (dictionnaire, traits, reconnaissance) est versionné ; le JS est construit par la CI

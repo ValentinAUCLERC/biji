@@ -184,6 +184,35 @@ const GIS_STUB = () => {
   ok(dur > 2 && stats.downloads >= 2, 'téléphone : audio téléchargé depuis Drive et lisible (' + dur.toFixed(1) + ' s)');
   await phone.screenshot({ path: OUT + '/cloud-03-tel-cours.png' });
 
+  /* ---- image annotable ajoutée sur le PC -> Drive (Biji/images) -> téléphone ---- */
+  await pc.goto(BASE + '?nosw#/c/' + lessonId);
+  await pc.waitForSelector('.ProseMirror');
+  await pc.evaluate(async () => {
+    const c = new OffscreenCanvas(1200, 800), x = c.getContext('2d');
+    x.fillStyle = '#2b5fc4'; x.fillRect(0, 0, 1200, 800);
+    const f = new File([await c.convertToBlob({ type: 'image/png' })], 'tableau.png', { type: 'image/png' });
+    Biji.editor.editor.commands.focus('end');
+    await Biji.editor.insertMedia([f]);
+    await Biji.store.flush();
+    await Biji.store.syncAll();
+  });
+  const imgf = driveFiles().find((f) => f.mimeType && f.mimeType.startsWith('image/'));
+  const imgFolder = driveFiles().find((f) => f.name === 'images');
+  ok(imgf && imgFolder && imgf.parents[0] === imgFolder.id, 'image envoyée dans Biji/images sur le Drive (' + (imgf ? imgf.content.length : 0) + ' octets)');
+  await phone.goto(BASE + '?nosw#/c/' + lessonId);
+  await phone.waitForSelector('.ProseMirror');
+  await phone.evaluate(() => Biji.store.syncAll());
+  await phone.waitForSelector('.nv-pic canvas', { timeout: 8000 }).catch(() => {});
+  if (!(await phone.$('.nv-pic canvas'))) { await phone.goto(BASE + '?nosw#/c/' + lessonId); await phone.waitForSelector('.nv-pic canvas', { timeout: 8000 }).catch(() => {}); }
+  const px = await phone.waitForFunction(() => {
+    const cv = document.querySelector('.nv-pic canvas');
+    if (!cv || !cv.width) return null;
+    const d = cv.getContext('2d').getImageData(cv.width >> 1, cv.height >> 1, 1, 1).data;
+    return d[2] > 150 && d[0] < 100 ? [...d] : null;
+  }, null, { timeout: 10000 }).then((h) => h.jsonValue()).catch(() => null);
+  ok(!!px, 'téléphone : l’image arrive depuis Drive et s’affiche dans le cours');
+  await pc.goto(BASE + '?nosw#/reglages');
+
   /* ---- modification sur le téléphone -> PC ---- */
   await phone.evaluate(() => Biji.editor.editor.chain().focus('end').insertContent(' écrit sur le téléphone').run());
   await phone.evaluate(() => Biji.store.flush());

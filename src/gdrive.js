@@ -14,7 +14,7 @@
   const FOLDER = 'application/vnd.google-apps.folder';
   const TOKEN_KEY = 'biji.gtoken';
 
-  const G = (B.gdrive = { state: 'off' /* off | on | expired */, email: '', name: '', folderId: '', audioId: '', progress: '' });
+  const G = (B.gdrive = { state: 'off' /* off | on | expired */, email: '', name: '', folderId: '', audioId: '', imagesId: '', progress: '' });
   G.available = () => !!CFG.googleClientId && /^https?:$/.test(location.protocol);
 
   /* ---------- jeton ---------- */
@@ -112,15 +112,17 @@
     try { const r = await json('/drive/v3/files/' + id + '?fields=id,trashed'); return !r.trashed; } catch (e) { if (e.status === 404) return false; throw e; }
   }
   async function ensureFolders() {
-    if (!(await stillThere(G.folderId))) { G.folderId = await folder('Biji'); G.audioId = ''; }
+    if (!(await stillThere(G.folderId))) { G.folderId = await folder('Biji'); G.audioId = G.imagesId = ''; }
     if (!(await stillThere(G.audioId))) G.audioId = await folder('audio', G.folderId);
+    if (!(await stillThere(G.imagesId))) G.imagesId = await folder('images', G.folderId);
     await save();
   }
-  const save = () => S.kvSet('gdrive', G.state === 'off' ? null : { email: G.email, name: G.name, folderId: G.folderId, audioId: G.audioId });
+  const save = () => S.kvSet('gdrive', G.state === 'off' ? null : { email: G.email, name: G.name, folderId: G.folderId, audioId: G.audioId, imagesId: G.imagesId });
 
   /* ---------- destination de synchro ---------- */
   const ids = new Map(); // nom de fichier -> id Drive
   const audioIds = new Map();
+  const imgIds = new Map();
   const queues = new Map();
   const be = {
     id: 'gdrive',
@@ -211,6 +213,29 @@
       await api('/drive/v3/files/' + id + '?fields=id', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
       audioIds.delete(rec.file);
     },
+    /* images : quelques centaines de Ko, envoi simple (multipart) */
+    async imgNames() {
+      if (!G.imagesId) await ensureFolders();
+      imgIds.clear();
+      for (const f of await listAll(`'${G.imagesId}' in parents and trashed=false`, 'id,name')) imgIds.set(f.name, f.id);
+      return new Set(imgIds.keys());
+    },
+    async imgPut(file, blob) {
+      if (!be.ready()) return false;
+      if (!G.imagesId) await ensureFolders();
+      if (imgIds.has(file)) return true;
+      const m = multipart({ name: file, parents: [G.imagesId], mimeType: blob.type || 'image/webp' }, blob, blob.type || 'image/webp');
+      const r = await (await api('/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', body: m.body, headers: m.headers })).json();
+      if (r.id) imgIds.set(file, r.id);
+      return true;
+    },
+    async imgGet(file) {
+      if (!be.ready()) return null;
+      if (!imgIds.has(file)) await be.imgNames();
+      const id = imgIds.get(file);
+      if (!id) return null;
+      return (await api('/drive/v3/files/' + id + '?alt=media')).blob();
+    },
   };
   S.register(be);
 
@@ -273,7 +298,7 @@
     token = null;
     localStorage.removeItem(TOKEN_KEY);
     G.state = 'off';
-    G.email = G.name = G.folderId = G.audioId = '';
+    G.email = G.name = G.folderId = G.audioId = G.imagesId = '';
     await save();
     ui();
   };

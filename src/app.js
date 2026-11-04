@@ -181,7 +181,7 @@
       B.h('div.btns',
         window.showDirectoryPicker ? B.h('button', { onclick: async () => { if (await S.pickDir()) { A.renderSide(); settingsPage(); } } }, S.dir ? 'Changer de dossier' : 'Choisir un dossier') : null,
         S.dir ? B.h('button.ghost', { onclick: async () => { await S.forgetDir(); A.renderSide(); settingsPage(); } }, 'Ne plus utiliser de dossier') : null,
-        B.h('button.ghost', { onclick: S.exportAll }, 'Exporter une sauvegarde (.json, sans l’audio)'),
+        B.h('button.ghost', { onclick: () => S.exportAll() }, 'Exporter une sauvegarde (.json avec les images, sans l’audio)'),
         B.h('button.ghost', { onclick: () => imp.click() }, 'Importer une sauvegarde'), imp),
       B.h('h2', 'Affichage'),
       row('Pinyin ', B.h('select', { onchange: (e) => { st.pinyin = e.target.value; A.saveSettings(); B.$('#pinbtn').textContent = PIN[st.pinyin]; } },
