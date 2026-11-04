@@ -45,6 +45,8 @@
       B.h('button.pill.rec', { 'data-act': 'rec', onclick: recClick }, '● Enregistrer'),
       B.h('button.pill', { 'data-act': 'recpause', hidden: true, onclick: () => B.rec.pause() }, '❚❚ Pause'),
       B.h('span.grow'),
+      B.h('span#netstate', { title: 'Pas de connexion : tout est enregistré sur cet appareil. La synchro (Google Drive) reprendra seule au retour du réseau ; la connexion est vérifiée régulièrement.',
+        onclick: () => B.net.check().then((on) => B.toast(on ? 'Connexion retrouvée' : 'Toujours hors ligne (nouvel essai automatique dans 15 s)')) }, '⚠ Hors ligne'),
       B.h('span#savestate'),
       B.h('span#cloud', { 'data-cloud': '' }));
     // les boutons ne gardent pas le focus : sinon Espace (dans les notes) « recliquerait » sur ● Enregistrer
@@ -116,6 +118,7 @@
       B.h('div.sfoot',
         B.h('a', { href: '#/revision' }, 'Réviser le vocabulaire'),
         B.h('a', { href: '#/reglages' }, 'Réglages et sauvegarde'),
+        B.h('button.ghost#installbtn', { hidden: true, onclick: () => A.install() }, '⤓ Installer Biji (marche hors ligne)'),
         B.h('div#dirstate')));
   }
 
@@ -175,6 +178,12 @@
     B.$('#page').replaceChildren(B.h('div.settings',
       B.h('h1', 'Réglages'),
       cloudSettings(),
+      B.h('h2', 'Hors ligne'),
+      B.h('p', 'Biji marche sans connexion : il démarre depuis le cache, et tout ce que tu écris (texte, dessins, images, audio) est enregistré sur cet appareil'
+        + (S.dirState === 'granted' ? ' et dans le dossier.' : '.') + ' Google Drive se resynchronise tout seul au retour du réseau (connexion vérifiée toutes les 15 s quand elle est coupée, chaque minute sinon).'
+        + ' Sans réseau : pas de reconnaissance d’écriture Google (moteur local à la place), ni de reconnexion Google.'),
+      B.h('p.hint', 'État : ' + (B.net.online ? 'en ligne' : 'hors ligne') + (navigator.serviceWorker && navigator.serviceWorker.controller ? ' · prêt pour le hors ligne' : ' · le hors-ligne sera prêt après ce premier chargement')),
+      A.canInstall() ? B.h('div.btns', B.h('button', { onclick: () => A.install() }, '⤓ Installer Biji comme une application')) : null,
       B.h('h2', 'Dossier sur ce PC'),
       B.h('p', S.dirState === 'granted' ? 'Les notes sont enregistrées dans le dossier « ' + S.dir.name + ' » (un fichier .json par cours, l’audio dans audio/) et dans ce navigateur.'
         : 'Pas de dossier connecté : les notes et l’audio ne sont que dans ce navigateur.'),
@@ -289,6 +298,27 @@
     setTimeout(() => B.lex.load().catch((e) => B.toast(e.message, 6000)), 50);
     if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => { if (location.hash === '#/reglages') settingsPage(); };
     registerSW();
+    B.net.start();
+    document.addEventListener('biji:net', (e) => { if (e.detail.online && B.editor.lesson) B.net.warmChars(B.docText(B.editor.lesson.doc)); A.renderSide(); });
+  };
+
+  /* ---------- installation (PWA) : icône sur le bureau / l'écran d'accueil, fenêtre à part ---------- */
+  let installEvt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installEvt = e;
+    const b = B.$('#installbtn');
+    if (b) b.hidden = false;
+  });
+  window.addEventListener('appinstalled', () => { installEvt = null; const b = B.$('#installbtn'); if (b) b.hidden = true; B.toast('Biji installé : il s’ouvre aussi sans connexion', 4000); });
+  A.canInstall = () => !!installEvt;
+  A.install = async function () {
+    if (!installEvt) return B.toast('Installation : menu du navigateur › « Installer Biji » (ou « Sur l’écran d’accueil » sur iPhone)', 5000);
+    installEvt.prompt();
+    await installEvt.userChoice.catch(() => null);
+    installEvt = null;
+    const b = B.$('#installbtn');
+    if (b) b.hidden = true;
   };
 
   /** Hors ligne (GitHub Pages) : service worker ; pas en file:// */

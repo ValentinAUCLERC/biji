@@ -395,3 +395,7 @@ body.penfirst .inkc { cursor: crosshair; }
 #pdfdlg input { flex: 1; min-height: 36px; font-size: 16px; }
 #pdfdlg .err { color: var(--red); }
 #pdfdlg .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* hors ligne */
+#netstate { display: none; font: 600 12px var(--ui); color: #8a5a00; background: #fff1c9; border: 1px solid #ecd28a; border-radius: 12px; padding: 3px 9px; cursor: pointer; white-space: nowrap; }
+body.offline #netstate { display: inline-block; }

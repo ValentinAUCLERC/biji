@@ -244,6 +244,28 @@ const GIS_STUB = () => {
   await phone.evaluate(() => Biji.store.syncAll());
   ok(await phone.evaluate((id) => !Biji.store.get(id), id2), 'téléphone : cours supprimé sur le PC disparu');
 
+  /* ---- coupure réseau sur le téléphone : on écrit, rien ne part, puis tout part au retour ---- */
+  const beforeOff = JSON.parse(driveFiles().find((f) => f.name === lessonId + '.json').content.toString()).updatedAt;
+  await phone.context().setOffline(true);
+  await phone.waitForFunction(() => !Biji.net.online, null, { timeout: 8000 }).catch(() => {});
+  await phone.evaluate(() => Biji.net.check());
+  await phone.evaluate((id) => { if (!Biji.editor.lesson || Biji.editor.lesson.id !== id) location.hash = '#/c/' + id; }, lessonId);
+  await phone.waitForSelector('.ProseMirror', { timeout: 8000 }).catch(() => {});
+  await phone.evaluate(() => Biji.editor.editor.chain().focus('end').insertContent('<p>Noté dans le métro</p>').run());
+  await phone.evaluate(() => Biji.store.flush());
+  await phone.evaluate(() => Biji.store.syncAll());
+  const after = JSON.parse(driveFiles().find((f) => f.name === lessonId + '.json').content.toString()).updatedAt;
+  ok(after === beforeOff && /hors ligne/i.test(await phone.$eval('#savestate', (e) => e.textContent)) && (await phone.evaluate(() => Biji.gdrive.state)) === 'on',
+    'hors ligne : modification gardée sur le téléphone, Drive toujours « connecté » (« ' + (await phone.$eval('#savestate', (e) => e.textContent)) + ' »)');
+  await phone.context().setOffline(false);
+  await phone.waitForFunction(() => Biji.net.online, null, { timeout: 20000 }).catch(() => {});
+  await phone.waitForFunction(() => Biji.store.lastSync && Date.now() - Biji.store.lastSync < 5000, null, { timeout: 10000 }).catch(() => {});
+  await phone.waitForTimeout(500);
+  ok(JSON.parse(driveFiles().find((f) => f.name === lessonId + '.json').content.toString()).doc && driveFiles().find((f) => f.name === lessonId + '.json').content.toString().includes('Noté dans le métro'),
+    'retour du réseau : la modification faite hors ligne part toute seule sur Drive');
+  await pc.evaluate(() => Biji.store.syncAll());
+  ok(await pc.evaluate((id) => JSON.stringify(Biji.store.get(id).doc).includes('métro'), lessonId), 'PC : reçoit la note écrite hors ligne sur le téléphone');
+
   /* ---- jeton expiré (1 h) : bouton « Reconnecter », rien de perdu ---- */
   await pc.evaluate(() => { const t = JSON.parse(localStorage.getItem('biji.gtoken')); t.exp = Date.now() - 1000; localStorage.setItem('biji.gtoken', JSON.stringify(t)); });
   await pc.reload();

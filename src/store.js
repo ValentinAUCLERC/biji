@@ -87,12 +87,16 @@
     await tx('lessons', 'readwrite', (s) => items.forEach((l) => s.put(l)));
     const bes = ready();
     const done = [];
+    let waiting = false;
     for (const be of bes) {
+      if (be.id !== 'dir' && !B.net.online) { waiting = true; continue; } // partira à la prochaine synchro
       let ok = true;
-      for (const l of items) ok = (await be.write(l).catch((e) => { console.warn(be.id, e); return false; })) && ok;
+      for (const l of items) ok = (await be.write(l).catch((e) => { console.warn(be.id, e); if (be.id !== 'dir') B.net.failed(e); return false; })) && ok;
       if (ok) done.push(be.label());
+      else waiting = true;
     }
-    S.status(done.length ? 'Enregistré · ' + done.join(' + ') : bes.length ? 'Enregistré dans le navigateur (synchro en attente)' : 'Enregistré dans le navigateur');
+    const where = done.length ? 'Enregistré · ' + done.join(' + ') : 'Enregistré dans le navigateur';
+    S.status(waiting ? where + (B.net.online ? ' (synchro en attente)' : ' · hors ligne, synchro au retour') : where);
   };
   window.addEventListener('pagehide', () => S.flush());
   document.addEventListener('visibilitychange', () => document.hidden && S.flush());
@@ -115,6 +119,7 @@
     await tx('audio', 'readwrite', (s) => s.put(blob, rec.id));
     let onDir = false;
     for (const be of ready()) {
+      if (be.id !== 'dir' && !B.net.online) continue; // envoyé à la prochaine synchro
       const p = be.audioPut(rec, blob).catch((e) => { console.warn(be.id, e); return false; });
       if (be.id === 'dir') onDir = await p; // l'envoi vers Drive continue en arrière-plan
     }
@@ -141,6 +146,7 @@
     await tx('images', 'readwrite', (s) => s.put(blob, file));
     for (const be of ready()) {
       if (!be.imgPut) continue;
+      if (be.id !== 'dir' && !B.net.online) continue; // envoyée à la prochaine synchro
       const p = be.imgPut(file, blob).catch((e) => { console.warn(be.id, e); return false; });
       if (be.id === 'dir') await p;
     }
@@ -179,7 +185,8 @@
     const prev = locks.get(be.id) || Promise.resolve();
     const p = prev.then(() => syncOne(be)).catch((e) => {
       console.warn('synchro', be.id, e);
-      S.status('Synchro ' + be.label() + ' impossible : ' + e.message, true);
+      if (be.id !== 'dir' && B.net.failed(e)) S.status('Hors ligne · enregistré sur cet appareil, synchro au retour du réseau');
+      else S.status('Synchro ' + be.label() + ' impossible : ' + e.message, true);
       return { pulled: 0, pushed: 0, error: e };
     });
     locks.set(be.id, p);
@@ -187,6 +194,8 @@
   };
   async function syncOne(be) {
     if (!be.ready()) return { pulled: 0, pushed: 0 };
+    // hors ligne : le dossier local marche toujours ; Drive attend le retour du réseau (rien n'est perdu)
+    if (be.id !== 'dir' && !B.net.online) return { pulled: 0, pushed: 0, offline: true };
     await S.flush();
     const remote = await be.list(); // Map id -> { u, ...ref }
     const pulled = [], toRemote = [];
@@ -341,10 +350,9 @@
   S.syncFromDir = () => S.sync(folder);
 
   /* ---------- synchro périodique (Drive : autres appareils) ---------- */
-  const auto = () => { if (!document.hidden && S.backends.some((b) => b.id !== 'dir' && b.ready())) S.syncAll(); };
+  const auto = () => { if (!document.hidden && B.net.online && S.backends.some((b) => b.id !== 'dir' && b.ready())) S.syncAll(); };
   setInterval(auto, 45000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(auto, 300); });
-  window.addEventListener('online', () => setTimeout(auto, 1000));
 
   /* ---------- export / import (sauvegarde manuelle, sans l'audio) ---------- */
   const toDataUrl = (b) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });

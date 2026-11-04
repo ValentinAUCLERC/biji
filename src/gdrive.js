@@ -281,6 +281,7 @@
   };
   /** Jeton expiré (1 h) : nouveau jeton sans re-choisir le compte */
   G.reconnect = async function () {
+    if (!B.net.online && !(await B.net.check())) { B.toast('Hors ligne : reconnexion à Google au retour du réseau (rien n’est perdu)', 4000); return false; }
     try {
       await requestToken(false);
       G.state = 'on';

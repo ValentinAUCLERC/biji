@@ -417,6 +417,7 @@ E.open = function (lesson) {
   E.renderRecs();
   E.renderVocab();
   refreshBar();
+  setTimeout(() => B.net.warmChars(B.docText(lesson.doc)), 1500); // ordre des traits dispo hors ligne
   if (B.docText(lesson.doc).trim() === '' && !lesson.doc.content.some((n) => n.type !== 'paragraph')) setTimeout(() => ed.commands.focus('end'), 50);
 };
 E.close = function () {

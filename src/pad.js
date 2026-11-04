@@ -90,7 +90,7 @@
   /** Reconnaissance : en ligne si permis, sinon (ou en cas d'échec) hors ligne. Renvoie {list, source} */
   B.recognize = async function (list, opts = {}) {
     const w = opts.w || LW, h = opts.h || LH;
-    if (B.settings.onlineHw !== false && navigator.onLine !== false && !opts.offline) {
+    if (B.settings.onlineHw !== false && B.net.online && !opts.offline) {
       try {
         const g = await recognizeGoogle(list, w, h);
         if (g.length) return { list: g.slice(0, 12), source: 'google' };
@@ -173,7 +173,7 @@
     B.$$('[data-act="pad"]').forEach((b) => b.classList.toggle('on', pad.open));
     if (pad.open) {
       ink.resize(true);
-      if (B.settings.onlineHw === false || !navigator.onLine) initLocal().catch((e) => B.toast(e.message));
+      if (B.settings.onlineHw === false || !B.net.online) initLocal().catch((e) => B.toast(e.message));
     }
   };
   /** Espace / Entrée au clavier pendant que le pavé a des candidats : prendre le premier */

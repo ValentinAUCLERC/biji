@@ -1,5 +1,6 @@
 /* Biji — point d'entrée du bundle (site/app.js) */
 import './util.js';
+import './net.js';
 import './lex.js';
 import './ime.js';
 import './store.js';

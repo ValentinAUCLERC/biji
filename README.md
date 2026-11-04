@@ -21,6 +21,9 @@ Une fois visité, il marche hors ligne.
 - **Images et PDF annotables** (🖼 Image / PDF, Ctrl+V d'une capture, glisser-déposer, 📷 photo sur téléphone) :
   l'image devient un bloc où dessiner au stylet par-dessus. Photos réduites à 2000 px (WebP), rangées dans `images/`
   (dossier et Drive), pas dans le JSON du cours. PDF : choix des pages, chaque page = un bloc, texte gardé pour la recherche.
+- **Hors ligne / PWA** : installable (icône, fenêtre à part) ; démarre sans réseau dès la 1re visite (dictionnaire,
+  reconnaissance locale et pdf.js mis en cache à l'installation). On écrit normalement hors ligne ; la connexion est
+  vérifiée vraiment (requête HEAD, toutes les 15 s coupé / 60 s sinon) et Drive se resynchronise seul au retour.
 - **Mode stylet d'abord** (bouton ✒ Stylet ou Réglages) : seul le stylet dessine (souris et doigt ne tracent plus) ;
   hors des dessins, glisser le stylet fait défiler la page (avec élan), toucher place le curseur,
   appui maintenu ½ s puis glisser sélectionne du texte.
@@ -70,6 +73,7 @@ node tests/ime-engine.mjs   # moteur pinyin -> 汉字
 node tests/cloud.js         # synchro Google Drive PC <-> téléphone contre un faux Drive local
 node tests/penfirst.js      # mode « stylet d’abord » (défilement au stylet, souris sans dessin)
 node tests/media.js         # images / PDF annotables (fichier, collage, dépôt, PDF, export/import)
+node tests/offline.js       # PWA hors ligne : démarrage sans réseau, écriture, retour du réseau
 ```
 
 `site/data/` (dictionnaire, traits, reconnaissance) est versionné ; le JS est construit par la CI
