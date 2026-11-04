@@ -1,4 +1,6 @@
 /* Biji — fiche d'un mot / caractère : pinyin, sens FR (EN en secours), voix, ordre des traits */
+import HanziWriter from 'hanzi-writer';
+
 (function () {
   const B = window.Biji;
   const C = (B.card = {});
@@ -28,7 +30,7 @@
   }
 
   /**
-   * ctx : { block, chars:[{ch,line,col,py}], focusChar } quand on vient d'un bloc texte (permet de corriger le pinyin)
+   * ctx : { chars:[{ch, py, fixed}], setPy(i, py) } quand on vient des notes (permet de corriger la lecture d'un caractère)
    */
   C.open = async function (word, ctx = {}) {
     ensure();
@@ -78,7 +80,7 @@
       let writer = null;
       const mk = () => {
         if (writer) return writer;
-        writer = window.HanziWriter.create(box, ch, {
+        writer = HanziWriter.create(box, ch, {
           width: 132, height: 132, padding: 6, charDataLoader: B.hwLoader,
           showOutline: true, strokeAnimationSpeed: 1.1, delayBetweenStrokes: 180,
           strokeColor: '#1f1d1a', radicalColor: '#c8382b', outlineColor: '#e6dccb',
@@ -98,8 +100,8 @@
           B.toast('À toi : trace le caractère dans la case, trait par trait');
         } }, '✍ S’entraîner'),
         ce.length > 0 && [...word].length > 1 ? B.h('button', { onclick: () => C.open(ch, {}) }, 'Fiche') : null);
-      // correction du pinyin quand on vient d'un bloc texte
-      if (ctx.block && ctx.chars && ctx.chars[i]) {
+      // correction du pinyin quand on vient des notes (caractère polyphone : 行 xíng / háng…)
+      if (ctx.setPy && ctx.chars && ctx.chars[i]) {
         const opts = [...new Set(ce.map((e) => B.numToMarks(e.p).toLowerCase()))].filter((p) => !/\s/.test(p));
         if (opts.length > 1) {
           const cur = ctx.chars[i].py;
@@ -107,12 +109,9 @@
             B.h('option', { value: '' }, 'Pinyin auto'),
             ...opts.map((p) => B.h('option', { value: p, selected: !!ctx.chars[i].fixed && p === cur.toLowerCase() }, p)));
           sel.addEventListener('change', () => {
-            const c = ctx.chars[i];
-            ctx.block.text = B.setPinyinOverride(ctx.block.text, c.line, c.col, sel.value);
-            B.store.touch(B.editor.lesson);
-            const el = B.$(`[data-id="${ctx.block.id}"]`);
-            if (el && el._render) el._render();
-            B.toast(sel.value ? `Pinyin de ${ch} fixé à « ${sel.value} »` : `Pinyin de ${ch} remis en automatique`);
+            ctx.setPy(i, sel.value);
+            ctx.chars[i].fixed = !!sel.value;
+            B.toast(sel.value ? `Pinyin de ${ch} fixé à « ${sel.value} » ici` : `Pinyin de ${ch} remis en automatique`);
           });
           info.appendChild(B.h('label.fix', 'Lecture ici : ', sel));
         }

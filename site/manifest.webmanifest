@@ -1,0 +1,11 @@
+{
+  "name": "Bǐjì · notes de chinois",
+  "short_name": "Bǐjì",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4eee2",
+  "theme_color": "#f4eee2",
+  "lang": "fr",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

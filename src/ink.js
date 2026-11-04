@@ -1,10 +1,26 @@
-/* Biji — surface d'encre (stylet) : pression, gomme (bouton du stylet), anti-paume, défilement au doigt */
+/* Biji — surface d'encre (stylet) : pression, gomme (bout gomme ou bouton du stylet), anti-paume, défilement au doigt */
 (function () {
   const B = window.Biji;
 
   B.tool = { kind: 'pen', color: '#1f1d1a', width: 2.6 }; // kind : pen | hl | eraser
   B.penActive = false;
   let lastPen = 0;
+  const hoverEraser = new Map(); // pointerId -> le stylet survole avec le bout gomme
+
+  /** Le bout gomme (ou le bouton gomme) est-il utilisé ? Chrome/Edge/Firefox : button 5 au contact, bit 32 dans buttons. */
+  B.isEraser = function (e) {
+    if (e.pointerType === 'eraser') return true; // anciens navigateurs
+    if (e.pointerType !== 'pen') return false;
+    return e.button === 5 || (e.buttons & 32) === 32 || hoverEraser.get(e.pointerId) === true;
+  };
+  function trackHover(e) {
+    if (e.pointerType !== 'pen') return;
+    if (e.buttons === 0) hoverEraser.delete(e.pointerId);
+    if ((e.buttons & 32) === 32 || e.button === 5) hoverEraser.set(e.pointerId, true);
+    if (B.penDiag) B.penDiag(e);
+  }
+  ['pointerover', 'pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'pointerleave'].forEach((t) =>
+    document.addEventListener(t, trackHover, true));
 
   function dist2Seg(px, py, ax, ay, bx, by) {
     const dx = bx - ax, dy = by - ay;
@@ -60,7 +76,7 @@
   /**
    * new B.Ink(canvas, {
    *   lw, lh: () => hauteur logique, strokes: tableau muté sur place,
-   *   bg(ctx, scale, w, h), onChange(), onStroke(stroke), fingerDraw: () => bool, grow: () => void
+   *   bg(ctx, scale, w, h), onChange(), onStroke(stroke), onStart(), fingerDraw: () => bool, grow: () => void
    * })
    */
   class Ink {
@@ -117,6 +133,13 @@
       this.ctx.restore();
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.cur && this.cur.stroke) B.drawStroke(this.ctx, this.cur.stroke, this.scale);
+      if (this.cur && this.cur.erase && this.cur.at) {
+        const s = this.scale;
+        this.ctx.beginPath();
+        this.ctx.arc(this.cur.at[0] * s, this.cur.at[1] * s, 10 * s, 0, 7);
+        this.ctx.strokeStyle = '#c8382b88';
+        this.ctx.stroke();
+      }
     }
     pt(e) {
       const r = this.c.getBoundingClientRect();
@@ -127,33 +150,37 @@
     fingerDraws() { return this.o.fingerDraw ? this.o.fingerDraw() : !!(B.settings && B.settings.fingerDraw); }
     down(e) {
       if (this.cur) return;
-      const pen = e.pointerType === 'pen';
+      const pen = e.pointerType === 'pen' || e.pointerType === 'eraser';
       if (pen) { lastPen = performance.now(); B.penActive = true; }
       if (e.pointerType === 'touch') {
         if (B.penActive || performance.now() - lastPen < 1200) { e.preventDefault(); return; } // paume posée
         if (!this.fingerDraws()) {
           this.scroll = { id: e.pointerId, y: e.clientY, x: e.clientX };
-          this.c.setPointerCapture(e.pointerId);
+          try { this.c.setPointerCapture(e.pointerId); } catch (err) { /* idem */ }
           return;
         }
       }
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       e.preventDefault();
-      this.c.setPointerCapture(e.pointerId);
+      e.stopPropagation();
+      try { this.c.setPointerCapture(e.pointerId); } catch (err) { /* pointeur synthétique */ }
       B.lastInk = this;
-      const erase = B.tool.kind === 'eraser' || (pen && (e.button === 5 || (e.buttons & 32) !== 0));
-      this.cur = {
-        id: e.pointerId, erase, before: this.strokes.slice(), removed: false,
-        stroke: erase ? null : { k: B.tool.kind === 'hl' ? 'hl' : 'pen', c: B.tool.kind === 'hl' ? (B.tool.hlColor || '#ffd54a') : B.tool.color, w: B.tool.kind === 'hl' ? 14 : B.tool.width * (this.o.penScale || 1), p: [] },
-      };
+      const erase = B.tool.kind === 'eraser' || B.isEraser(e);
+      this.cur = { id: e.pointerId, erase, before: this.strokes.slice(), removed: false, stroke: erase ? null : this.newStroke() };
       if (this.o.onStart) this.o.onStart();
       this.add(e);
     }
+    newStroke() {
+      const hl = B.tool.kind === 'hl';
+      return { k: hl ? 'hl' : 'pen', c: hl ? (B.tool.hlColor || '#ffd54a') : B.tool.color, w: hl ? 14 : B.tool.width * (this.o.penScale || 1), p: [] };
+    }
     add(e) {
+      // le bout gomme peut n'être signalé qu'après le contact : on bascule le trait en gomme
+      if (!this.cur.erase && B.isEraser(e)) { this.cur.erase = true; this.cur.stroke = null; }
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
       for (const ev of evs.length ? evs : [e]) {
         const q = this.pt(ev);
-        if (this.cur.erase) this.eraseAt(q);
+        if (this.cur.erase) { this.cur.at = q; this.eraseAt(q); }
         else {
           const p = this.cur.stroke.p;
           const l = p[p.length - 1];
@@ -163,8 +190,8 @@
       if (!this.cur.erase) {
         const y = this.cur.stroke.p.length ? this.cur.stroke.p[this.cur.stroke.p.length - 1][1] : 0;
         if (this.o.grow && y > this.o.lh() - 50) { this.o.grow(); this.layout(); }
-        this.paint();
       }
+      this.paint();
     }
     eraseAt(q) {
       const r2 = 10 * 10;
@@ -193,12 +220,13 @@
       this.add(e);
     }
     up(e, cancel) {
-      if (e.pointerType === 'pen') { B.penActive = false; lastPen = performance.now(); }
+      if (e.pointerType === 'pen' || e.pointerType === 'eraser') { B.penActive = false; lastPen = performance.now(); }
       if (this.scroll && e.pointerId === this.scroll.id) { this.scroll = null; return; }
       if (!this.cur || e.pointerId !== this.cur.id) return;
       const cur = this.cur;
       this.cur = null;
       if (cur.erase) {
+        this.paint();
         if (cur.removed) { this.hist.push(cur.before); this.changed(); }
         return;
       }

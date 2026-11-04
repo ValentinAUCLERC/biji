@@ -1,164 +1,292 @@
-// Test de bout en bout (headless) : node tests/e2e.js  — nécessite playwright-core + /usr/bin/chromium
+// Test de bout en bout V2 (headless Chromium) : npm run build && node tests/e2e.js
+// Variables : OUT=dossier des captures, BASE=url (défaut : serveur http local sur site/), PW=chemin playwright-core
 const path = require('path');
+const http = require('http');
+const fs = require('fs');
 const { chromium } = require(process.env.PW || 'playwright-core');
-const OUT = process.env.OUT || '/tmp';
-const URL = 'file://' + path.resolve(__dirname, '../site/index.html');
+const OUT = process.env.OUT || '/tmp/biji-shots';
+fs.mkdirSync(OUT, { recursive: true });
+
+function serve(dir) {
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.map': 'application/json' };
+  const srv = http.createServer((req, res) => {
+    let f = path.join(dir, decodeURIComponent(req.url.split('?')[0]));
+    if (f.endsWith('/')) f += 'index.html';
+    fs.readFile(f, (err, data) => {
+      if (err) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream' });
+      res.end(data);
+    });
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
 
 (async () => {
-  const b = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
-  const ctx = await b.newContext({ viewport: { width: 1366, height: 860 }, deviceScaleFactor: 1 });
+  const srv = process.env.BASE ? null : await serve(path.resolve(__dirname, '../site'));
+  const BASE = process.env.BASE || `http://127.0.0.1:${srv.address().port}/`;
+  const b = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
+  const ctx = await b.newContext({ viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1, permissions: ['microphone'] });
   const p = await ctx.newPage();
   const errs = [];
   p.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
-  p.on('console', (m) => m.type() === 'error' && errs.push('console: ' + m.text()));
+  p.on('console', (m) => m.type() === 'error' && !/inputtools|favicon/.test(m.text()) && errs.push('console: ' + m.text()));
   const cdp = await ctx.newCDPSession(p);
-  const ok = (cond, msg) => { console.log((cond ? 'OK   ' : 'FAIL ') + msg); if (!cond) process.exitCode = 1; };
+  let fails = 0;
+  const ok = (cond, msg) => { console.log((cond ? 'OK   ' : 'FAIL ') + msg); if (!cond) fails++; };
+  const shot = (n) => p.screenshot({ path: `${OUT}/${n}.png` });
+  const ev = (f, a) => p.evaluate(f, a);
 
-  // tracé au « stylet » (CDP pointerType pen, avec pression)
-  async function penStroke(pts) {
+  async function penStroke(pts, opts = {}) {
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pts[0][0], y: pts[0][1], pointerType: 'pen' });
     await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: pts[0][0], y: pts[0][1], button: 'left', buttons: 1, clickCount: 1, pointerType: 'pen', force: 0.6 });
     for (const [x, y] of pts.slice(1)) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1, pointerType: 'pen', force: 0.7 });
     const l = pts[pts.length - 1];
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: l[0], y: l[1], button: 'left', buttons: 0, clickCount: 1, pointerType: 'pen' });
+    if (opts.wait !== false) await p.waitForTimeout(80);
   }
   const line = (x0, y0, x1, y1, n = 12) => Array.from({ length: n + 1 }, (_, i) => [x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n]);
+  /** Bout gomme : événements pointer synthétiques (button 5 / buttons 32, comme Chrome sous Windows) */
+  const eraserStroke = (sel, pts) => ev(([sel, pts]) => {
+    const c = document.querySelector(sel);
+    const mk = (type, x, y, extra) => c.dispatchEvent(new PointerEvent(type, Object.assign({ bubbles: true, cancelable: true, pointerId: 77, pointerType: 'pen', clientX: x, clientY: y, pressure: 0.5 }, extra)));
+    mk('pointerdown', pts[0][0], pts[0][1], { button: 5, buttons: 32 });
+    for (const [x, y] of pts.slice(1)) mk('pointermove', x, y, { button: -1, buttons: 32 });
+    const l = pts[pts.length - 1];
+    mk('pointerup', l[0], l[1], { button: 5, buttons: 0 });
+  }, [sel, pts]);
+  /** clic « visuel » au centre d'un caractère (le pinyin ::before fausse le test de cible de Playwright) */
+  const clickAt = async (sel) => {
+    await p.$eval(sel, (e) => e.scrollIntoView({ block: 'center' }));
+    const r = await p.$eval(sel, (e) => { const b = e.getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; });
+    await p.mouse.click(r[0], r[1]);
+  };
+  const lesson = () => ev(() => { Biji.editor.syncDoc(); return JSON.parse(JSON.stringify(Biji.editor.lesson)); });
 
-  await p.goto(URL);
-  await p.waitForFunction(() => Biji.lex.ready, null, { timeout: 30000 });
-  const t0 = await p.evaluate(() => performance.now());
-  console.log('dictionnaire chargé à', Math.round(t0), 'ms (cumul page)');
-  await p.screenshot({ path: OUT + '/01-accueil.png' });
+  await p.goto(BASE + '?nosw');
+  await p.waitForFunction(() => window.Biji && Biji.lex.ready, null, { timeout: 40000 });
+  ok(true, 'dictionnaire chargé');
+  await shot('01-accueil');
 
-  // nouveau cours + saisie
+  /* ---- saisie ---- */
   await p.click('text=+ Nouveau cours');
-  await p.waitForFunction(() => document.activeElement && document.activeElement.matches('textarea.zh-edit'));
-  await p.keyboard.type('# 第一课 Leçon 1\n你好！我是学生。\n- ni3 hao3 = bonjour\n- 我们去银行。他走了。');
-  const val = await p.$eval('textarea.zh-edit', (t) => t.value);
-  ok(val.includes('nǐ hǎo'), 'conversion ni3 hao3 -> nǐ hǎo : ' + JSON.stringify(val.split('\n')[2]));
+  await p.waitForSelector('.ProseMirror');
+  await p.waitForFunction(() => document.activeElement && document.activeElement.classList.contains('ProseMirror'));
+  await p.keyboard.type('Leçon 1 : se présenter ');
+  // Maj seule -> pinyin -> 汉字
+  await p.keyboard.press('Shift');
+  ok(await ev(() => Biji.ime.on), 'Maj seule active la saisie pinyin');
+  await p.keyboard.type('nihao');
+  await p.waitForSelector('#imebox:not([hidden]) .ic');
+  const top1 = await p.$eval('#imebox .ic.on .w', (e) => e.textContent);
+  ok(top1 === '你好', 'nihao propose 你好 en premier : ' + top1);
+  const gl = await p.$eval('#imebox .ic.on .g', (e) => e.textContent);
+  ok(/bonjour|salut/i.test(gl), 'sens français sous le candidat : ' + gl);
+  await shot('02-ime');
+  await p.keyboard.press('Space');
+  await p.keyboard.type('woshixuesheng');
+  await p.keyboard.press('Space');
+  await p.keyboard.type('.');
+  await p.keyboard.press('Shift');
+  ok(!(await ev(() => Biji.ime.on)), 'Maj seule revient au clavier français');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('ni3 hao3 = bonjour');
+  let txt = await ev(() => Biji.editor.editor.getText());
+  ok(txt.includes('你好我是学生。'), 'texte chinois inséré : ' + JSON.stringify(txt.split('\n')[0]));
+  ok(txt.includes('nǐ hǎo = bonjour'), 'ni3 hao3 -> nǐ hǎo');
+  const pys = await p.$$eval('.hz', (els) => els.map((e) => e.dataset.py).join(' '));
+  ok(pys.startsWith('nǐ hǎo wǒ shì xué shēng'), 'pinyin affiché au-dessus : ' + pys);
+
+  /* ---- bloc vide conservé ---- */
+  await p.keyboard.press('Enter');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('Après deux lignes vides');
   await p.click('.ltitle');
-  await p.fill('.ltitle', 'Cours 1 · Salutations');
-  await p.waitForSelector('.blk-text:not(.editing) .zh-view ruby');
-  const rts = await p.$$eval('.zh-view ruby', (rs) => rs.map((r) => r.dataset.ch + (r.querySelector('rt').textContent)).join(' '));
-  ok(/你nǐ 好hǎo/.test(rts), 'pinyin au-dessus des caractères : ' + rts.slice(0, 80));
-  ok(/行háng/.test(rts), '银行 -> háng (polyphone en contexte)');
-  ok(/了le/.test(rts), '了 -> le');
-  const words = await p.$$eval('.zh-view .w', (ws) => ws.map((w) => w.dataset.w));
-  ok(words.includes('你好') && words.includes('学生') && words.includes('银行'), 'segmentation en mots : ' + words.join('/'));
+  await p.waitForTimeout(300);
+  const paras = await ev(() => Biji.editor.editor.getJSON().content.filter((n) => n.type === 'paragraph').length);
+  ok(paras >= 4, 'les paragraphes vides restent après la perte du focus (' + paras + ')');
 
-  // fiche d'un mot
-  await p.click('.w[data-w="学生"]');
-  await p.waitForSelector('#card:not([hidden]) .reading');
-  const cardTxt = await p.$eval('#card', (c) => c.innerText);
-  ok(/étudiant/.test(cardTxt), 'fiche 学生 en français');
-  await p.waitForSelector('#card .hw svg', { timeout: 5000 }).catch(() => {});
-  ok(!!(await p.$('#card .hw svg')), 'Hanzi Writer affiché (données de traits en file://)');
-  await p.click('#card .ctx button.primary');
-  await p.screenshot({ path: OUT + '/02-fiche.png' });
+  /* ---- tableau ---- */
+  await p.click('.ProseMirror p:last-child');
+  await p.keyboard.press('End');
+  await p.click('.fmtbar button.dd:has-text("Tableau")');
+  await p.click('text=Insérer 3 × 3');
+  await p.keyboard.type('汉字');
+  await p.keyboard.press('Tab');
+  await p.keyboard.type('pinyin');
+  await p.keyboard.press('Tab');
+  await p.keyboard.type('sens');
+  await p.keyboard.press('Tab');
+  await p.keyboard.press('Shift');
+  await p.keyboard.type('laoshi');
+  await p.keyboard.press('Space');
+  await p.keyboard.press('Shift');
+  await p.keyboard.press('Tab');
+  await p.keyboard.type('lao3 shi1');
+  ok(await p.isVisible('.tblbar'), 'barre « Tableau » visible dans un tableau');
+  await p.click('.tblbar button:has-text("+ ligne")');
+  const rows = await p.$$eval('.ProseMirror table tr', (r) => r.length);
+  ok(rows === 4, 'tableau 3 × 3 + 1 ligne : ' + rows + ' lignes');
+  ok(await p.$eval('.ProseMirror table', (t) => t.textContent.includes('老师') && t.textContent.includes('lǎo shī')), 'saisie 中 et ni3 dans les cellules');
+  await shot('03-tableau');
 
-  // correction de pinyin sur 行 (via la fiche de 银行)
-  await p.click('#card .cbtns .icon');
-  await p.click('.w[data-w="银行"]');
-  await p.waitForSelector('#card .fix select');
-  const sels = await p.$$('#card .fix select');
-  await sels[sels.length - 1].selectOption('xíng');
-  await p.waitForTimeout(200);
-  const txt2 = await p.evaluate(() => Biji.editor.lesson.blocks[0].text);
-  ok(txt2.includes('行[xíng]'), 'correction de pinyin écrite dans le texte : ' + txt2.split('\n')[3]);
-  const rt2 = await p.$$eval('.zh-view ruby.fixed', (rs) => rs.map((r) => r.dataset.ch + r.querySelector('rt').textContent));
-  ok(rt2.includes('行xíng'), 'lecture corrigée affichée');
-  await sels[sels.length - 1].selectOption('');
-  await p.click('#card .cbtns .icon');
+  /* ---- mise en forme ---- */
+  await p.click('.ProseMirror > p:first-child', { clickCount: 3 });
+  await p.click('.fmtbar button[data-k="bold"]');
+  ok(await p.$('.ProseMirror p:first-child strong') != null, 'gras appliqué');
 
-  // pavé d'écriture : tracer 十 au stylet puis insérer le candidat
-  await p.click('.zh-view');
-  await p.keyboard.press('Control+End');
-  await p.keyboard.type('\n手写：');
-  await p.click('button[data-act="pad"]');
+  /* ---- sélection de pinyin -> 汉字 ---- */
+  await ev(() => { const ed = Biji.editor.editor; ed.chain().focus('end').insertContent('<p>zhongguo</p>').run(); });
+  await ev(() => { const ed = Biji.editor.editor; const end = ed.state.doc.content.size - 1; ed.commands.setTextSelection({ from: end - 8, to: end }); });
+  await p.waitForSelector('#bubble:not([hidden]) .bc .ic');
+  const conv = await p.$$eval('#bubble .ic .w', (e) => e.map((x) => x.textContent));
+  ok(conv[0] === '中国', 'sélection « zhongguo » → propose 中国 : ' + conv.slice(0, 4).join(' '));
+  await shot('04-selection-pinyin');
+  await p.click('#bubble .ic');
+  txt = await ev(() => Biji.editor.editor.getText());
+  ok(txt.trim().endsWith('中国'), 'pinyin remplacé par 中国');
+
+  /* ---- clic sur un mot : bulle + vocabulaire + fiche ---- */
+  await clickAt('.hz[data-w="学生"]');
+  await p.waitForSelector('#bubble[data-mode="word"]:not([hidden])');
+  ok(/étudiant|élève/i.test(await p.$eval('#bubble .bg', (e) => e.textContent)), 'bulle : sens de 学生');
+  await shot('05-bulle-mot');
+  await p.click('#bubble button:has-text("+ Vocabulaire")');
+  ok((await lesson()).vocab.some((v) => v.hz === '学生' && v.py === 'xué shēng'), 'ajout au vocabulaire (学生, xué shēng)');
+  await clickAt('.hz[data-w="学生"]');
+  await p.click('#bubble button:has-text("Fiche")');
+  await p.waitForSelector('#card:not([hidden]) .hw svg', { timeout: 10000 });
+  ok(true, 'fiche ouverte avec les traits');
+  await p.keyboard.press('Escape');
+  await p.click('#page .ltitle');
+  await p.keyboard.press('Escape');
+
+  /* ---- correction de lecture (polyphone) ---- */
+  await ev(() => Biji.editor.editor.chain().focus('end').insertContent('<p>银行</p>').run());
+  await p.waitForTimeout(100);
+  const hang = await p.$eval('.hz[data-w="银行"][data-wi="1"]', (e) => e.dataset.py);
+  ok(hang === 'háng', '银行 : 行 lu háng en contexte : ' + hang);
+
+  /* ---- dessin + gomme ---- */
+  await p.click('.fmtbar button:has-text("✏ Dessin")');
+  await p.waitForSelector('.nv-ink canvas');
+  await p.$eval('.nv-ink', (e) => e.scrollIntoView({ block: 'center' }));
+  const box = await (await p.$('.nv-ink canvas')).boundingBox();
+  await penStroke(line(box.x + 40, box.y + 60, box.x + 300, box.y + 60));
+  await penStroke(line(box.x + 40, box.y + 160, box.x + 300, box.y + 200));
+  let L = await lesson();
+  const inkId = Object.keys(L.inks)[0];
+  ok(L.inks[inkId] && L.inks[inkId].length === 2, 'deux traits dessinés au stylet');
+  await eraserStroke('.nv-ink canvas', line(box.x + 150, box.y + 30, box.x + 150, box.y + 90, 6));
+  L = await lesson();
+  ok(L.inks[inkId].length === 1, 'bout gomme du stylet (button 5 / buttons 32) : trait effacé, reste ' + L.inks[inkId].length);
+  ok(await ev(() => Biji.tool.kind) === 'pen', 'l’outil reste « stylo » après la gomme matérielle');
+  await shot('06-dessin');
+
+  /* ---- cases 田 ---- */
+  await ev(() => Biji.editor.editor.chain().focus('end').run());
+  await p.click('.fmtbar button:has-text("田 Cases")');
+  await p.fill('.nv-grid .gridchars', '你好');
+  await p.waitForSelector('.nv-grid .gridrow:nth-child(2)', { timeout: 5000 });
+  ok((await p.$$('.nv-grid .gridrow')).length === 2, 'cases 田 : 2 lignes (你, 好)');
+
+  /* ---- pavé d'écriture ---- */
+  await p.keyboard.press('Alt+h');
   await p.waitForSelector('#pad:not([hidden])');
-  const bx = await p.$eval('#padcanvas', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width }; });
-  const P = (u, v) => [bx.x + (u / 100) * bx.w, bx.y + (v / 100) * bx.w];
-  await penStroke(line(...P(15, 45), ...P(85, 45)));
-  await penStroke(line(...P(50, 10), ...P(50, 92)));
-  await p.waitForFunction(() => [...document.querySelectorAll('.cand .ch')].some((c) => c.textContent === '十'), null, { timeout: 10000 }).catch(() => {});
-  const cands = await p.$$eval('.cand .ch', (c) => c.map((x) => x.textContent));
-  ok(cands.slice(0, 3).includes('十'), 'reconnaissance de 十 : ' + cands.join(''));
-  await p.screenshot({ path: OUT + '/03-pave.png' });
-  await p.click('.cand:has-text("十")');
-  const txt3 = await p.evaluate(() => Biji.editor.lesson.blocks[0].text);
-  ok(txt3.endsWith('手写：十'), 'candidat inséré au curseur : ' + JSON.stringify(txt3.slice(-6)));
-  await p.click('button[data-act="pad"]');
-
-  // bloc dessin : un trait au stylet, puis gomme
-  await p.click('text=+ Dessin libre');
-  await p.waitForSelector('.inkc');
-  const ib = await p.$eval('.inkc', (c) => { c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
-  await penStroke(line(ib.x + 40, ib.y + 60, ib.x + 300, ib.y + 140, 30));
-  await penStroke(line(ib.x + 60, ib.y + 200, ib.x + 260, ib.y + 220, 20));
-  let n = await p.evaluate(() => Biji.editor.lesson.blocks.find((b) => b.type === 'ink').strokes.length);
-  ok(n === 2, 'deux traits enregistrés dans le bloc dessin (' + n + ')');
-  ok(await p.evaluate(() => Biji.editor.lesson.blocks.find((b) => b.type === 'ink').strokes[0].p.some((q) => q[2] > 0.5)), 'pression du stylet enregistrée');
-  await p.click('.tool[title^="Gomme"]');
-  await penStroke(line(ib.x + 150, ib.y + 190, ib.x + 160, ib.y + 230, 6));
-  n = await p.evaluate(() => Biji.editor.lesson.blocks.find((b) => b.type === 'ink').strokes.length);
-  ok(n === 1, 'gomme : un trait effacé (' + n + ' restant)');
-  await p.click('#toolbar .icon[title^="Annuler"]');
-  n = await p.evaluate(() => Biji.editor.lesson.blocks.find((b) => b.type === 'ink').strokes.length);
-  ok(n === 2, 'annuler restaure le trait (' + n + ')');
-  await p.click('.tool[title="Stylo noir"]');
-
-  // bloc cases 田
-  await p.click('text=+ Cases 田');
-  await p.fill('.gridchars', '你好');
-  await p.waitForTimeout(700);
-  const rows = await p.$$eval('.gridrow', (r) => r.length);
-  ok(rows === 2, 'cases 田 : une ligne par caractère (' + rows + ')');
-  const cb = await p.$eval('.gridrow .cellwrap:nth-child(3) canvas', (c) => { c.scrollIntoView({ block: 'center' }); const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width }; });
-  await penStroke(line(cb.x + 10, cb.y + 30, cb.x + 50, cb.y + 30));
-  ok(await p.evaluate(() => Biji.editor.lesson.blocks.find((b) => b.type === 'grid').cells['你:1'].length === 1), 'tracé dans une case enregistré');
+  await ev(() => Biji.editor.editor.chain().focus('end').run());
+  const pb = await (await p.$('#padcanvas')).boundingBox();
+  const cw = pb.width / 3;
+  // 十 dans la 1re case, 一 dans la 2e
+  await penStroke(line(pb.x + 15, pb.y + 50, pb.x + cw - 15, pb.y + 50));
+  await penStroke(line(pb.x + cw / 2, pb.y + 12, pb.x + cw / 2, pb.y + 92));
+  await penStroke(line(pb.x + cw + 15, pb.y + 52, pb.x + 2 * cw - 15, pb.y + 52));
+  await p.waitForSelector('#pad .cand', { timeout: 8000 });
   await p.waitForTimeout(800);
-  await p.evaluate(() => window.scrollTo(0, 0));
-  await p.screenshot({ path: OUT + '/04-cours.png', fullPage: true });
+  const src = await p.$eval('#pad .src', (e) => e.textContent);
+  const cands = await p.$$eval('#pad .cand .ch', (e) => e.map((x) => x.textContent));
+  ok(cands.some((c) => c.startsWith('十')), `pavé (${src}) : ${cands.slice(0, 6).join(' ')}`);
+  await shot('07-pave');
+  await p.click('#pad .cand');
+  ok((await ev(() => Biji.editor.editor.getText())).includes(cands[0]), 'candidat inséré dans les notes : ' + cands[0]);
+  // hors ligne
+  await ev(() => { Biji.settings.onlineHw = false; });
+  await penStroke(line(pb.x + 15, pb.y + 50, pb.x + cw - 15, pb.y + 50));
+  await penStroke(line(pb.x + cw / 2, pb.y + 12, pb.x + cw / 2, pb.y + 92));
+  await p.waitForTimeout(700);
+  await p.waitForFunction(() => document.querySelector('#pad .src').textContent === 'hors ligne' && document.querySelector('#pad .cand'), null, { timeout: 15000 });
+  const off = await p.$$eval('#pad .cand .ch', (e) => e.map((x) => x.textContent));
+  ok(off.includes('十'), 'reconnaissance hors ligne : ' + off.slice(0, 6).join(' '));
+  await ev(() => { Biji.settings.onlineHw = true; });
+  await p.click('#pad header button.icon');
 
-  // vocabulaire repéré + ajout
-  await p.waitForSelector('#vocab .chip');
-  await p.click('#vocab .chip:has-text("你好")');
-  const voc = await p.evaluate(() => Biji.editor.lesson.vocab.map((v) => v.hz + '|' + v.py + '|' + v.fr));
-  ok(voc.length === 2, 'vocabulaire : ' + voc.join(' ; '));
+  /* ---- enregistrement ---- */
+  await p.click('[data-act="rec"]');
+  await p.waitForFunction(() => Biji.rec.state === 'rec', null, { timeout: 8000 });
+  await p.waitForTimeout(2600);
+  ok(await ev(() => Biji.editor.editor.isFocused), 'le bouton ● Enregistrer ne vole pas le focus des notes');
+  await ev(() => Biji.editor.editor.chain().focus('end').run());
+  await p.waitForTimeout(50);
+  await p.keyboard.press('Alt+m');
+  await p.keyboard.type('le prof répète');
+  await shot('08-enregistrement');
+  await p.waitForTimeout(2600);
+  p.once('dialog', (d) => d.accept());
+  await p.click('[data-act="rec"]');
+  await p.waitForFunction(() => Biji.rec.state === 'idle' && Biji.editor.lesson.recordings.length === 1, null, { timeout: 10000 });
+  L = await lesson();
+  const rec = L.recordings[0];
+  ok(rec.dur > 4000 && rec.size > 1000, `enregistrement sauvé : ${Math.round(rec.dur / 1000)} s, ${rec.size} octets, ${rec.type}`);
+  const stamps = JSON.stringify(L.doc).match(/"type":"stamp"/g) || [];
+  ok(stamps.length === 2, 'repères audio dans les notes (début + Alt+M) : ' + stamps.length);
+  await p.waitForFunction(() => { const a = document.querySelector('#recs audio'); return a && a.src; }, null, { timeout: 5000 });
+  const dur = await p.$eval('#recs audio', (a) => new Promise((r) => { if (a.readyState >= 1) r(a.duration); else a.onloadedmetadata = () => r(a.duration); }));
+  ok(dur > 4 && isFinite(dur), 'lecteur audio : durée ' + dur.toFixed(1) + ' s');
+  await p.click('.ProseMirror .stamp >> nth=1');
+  await p.waitForTimeout(500);
+  const t = await p.$eval('#recs audio', (a) => ({ t: a.currentTime, paused: a.paused }));
+  ok(!t.paused && t.t > 0.2, 'clic sur un repère : lecture à ' + t.t.toFixed(1) + ' s');
+  await p.$eval('#recs audio', (a) => a.pause());
+  await shot('09-audio');
 
-  // persistance (IndexedDB) après rechargement
-  await p.evaluate(() => Biji.store.flush());
+  /* ---- persistance ---- */
+  const id = L.id;
+  await ev(() => Biji.store.flush());
   await p.reload();
-  await p.waitForSelector('#lessons a');
-  await p.click('#lessons a');
-  await p.waitForSelector('.zh-view ruby');
-  const persisted = await p.evaluate(() => ({ blocks: Biji.editor.lesson.blocks.length, vocab: Biji.editor.lesson.vocab.length, title: Biji.editor.lesson.title }));
-  ok(persisted.blocks === 3 && persisted.vocab === 2, 'rechargement : ' + JSON.stringify(persisted));
+  await p.waitForSelector('.ProseMirror');
+  const after = await ev(() => Biji.editor.editor.getText());
+  ok(after.includes('你好我是学生') && after.includes('le prof répète'), 'contenu conservé après rechargement' + (after.includes('le prof') ? '' : ' : ' + JSON.stringify(after.slice(-200))));
+  ok((await p.$$('.ProseMirror table')).length === 1 && (await p.$$('.nv-ink')).length === 1 && (await p.$$('.stamp')).length === 2, 'tableau, dessin et repères conservés');
+  ok(await ev((id) => location.hash === '#/c/' + id, id), 'même cours rouvert');
 
-  // révision : lire puis écrire
-  await p.goto(URL + '#/revision');
+  /* ---- migration d'un cours V1 ---- */
+  const v1id = await ev(() => Biji.store.create({ title: 'Ancien cours', doc: undefined, blocks: [
+    { id: 'b1', type: 'text', text: '# Titre\n我们去银行[hang2]。\n- point un\n- point deux' },
+    { id: 'b2', type: 'ink', h: 300, strokes: [{ k: 'pen', c: '#000', w: 2.6, p: [[10, 10, 0.5], [100, 100, 0.5]] }] },
+    { id: 'b3', type: 'grid', chars: '我', reps: 4, cells: {} }] }).id);
+  await p.goto(BASE + '?nosw#/c/' + v1id);
+  await p.waitForSelector('.ProseMirror h1');
+  const mig = await ev(() => ({ h1: document.querySelector('.ProseMirror h1').textContent, li: document.querySelectorAll('.ProseMirror li').length,
+    ink: document.querySelectorAll('.nv-ink').length, grid: document.querySelectorAll('.nv-grid').length, fixed: document.querySelector('.hz.fixed') && document.querySelector('.hz.fixed').dataset.py }));
+  ok(mig.h1 === 'Titre' && mig.li === 2 && mig.ink === 1 && mig.grid === 1 && mig.fixed === 'háng', 'migration V1 → V2 : ' + JSON.stringify(mig));
+  await shot('10-migration');
+
+  /* ---- révision + réglages ---- */
+  await p.goto(BASE + '?nosw#/revision');
   await p.waitForSelector('.rcard');
-  await p.click('text=Voir la réponse');
-  await p.waitForSelector('.ans');
-  await p.screenshot({ path: OUT + '/05-revision-lire.png' });
-  await p.click('text=Je savais');
-  await p.click('.tabs button:has-text("Écrire")');
-  await p.waitForSelector('.hwbig svg', { timeout: 5000 });
-  await p.screenshot({ path: OUT + '/06-revision-ecrire.png' });
+  ok(true, 'page de révision');
+  await p.goto(BASE + '?nosw#/reglages');
+  await p.waitForSelector('.penzone');
+  await shot('11-reglages');
 
-  // réglages
-  await p.goto(URL + '#/reglages');
-  await p.waitForSelector('.settings');
-  await p.screenshot({ path: OUT + '/07-reglages.png', fullPage: true });
-
-  // mobile / tablette portrait
-  await p.setViewportSize({ width: 390, height: 844 });
-  await p.goto(URL);
-  await p.waitForSelector('#lessons a', { state: 'attached' });
-  await p.evaluate(() => (location.hash = '#/c/' + Biji.store.list()[0].id));
-  await p.waitForSelector('.zh-view ruby');
-  await p.screenshot({ path: OUT + '/08-mobile.png', fullPage: true });
+  /* ---- mobile / étroit ---- */
+  await p.setViewportSize({ width: 820, height: 1100 });
+  await p.goto(BASE + '?nosw#/c/' + id);
+  await p.waitForSelector('.ProseMirror');
+  await p.waitForTimeout(400);
+  await shot('12-etroit');
 
   ok(errs.length === 0, 'aucune erreur JS' + (errs.length ? ' : ' + errs.join(' | ') : ''));
   await b.close();
-})().catch((e) => { console.error(e); process.exit(1); });
+  if (srv) srv.close();
+  console.log(fails ? `\n${fails} échec(s)` : '\nTout est vert');
+  process.exit(fails ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(2); });

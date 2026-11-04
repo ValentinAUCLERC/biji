@@ -1,48 +1,57 @@
 # Bǐjì 笔记 · notes de chinois
 
-Site de prise de notes pour les cours de chinois : clavier + stylet sur la même page.
-Statique, sans serveur, sans compte : on ouvre `site/index.html` dans Edge ou Chrome.
+Prise de notes pour les cours de chinois : clavier et stylet sur la même page, enregistrement du cours, vocabulaire.
+Site statique, sans serveur ni compte. En ligne : **https://valentinauclerc.github.io/biji/** (Edge ou Chrome conseillés).
+Une fois visité, il marche hors ligne.
 
 ## Ce que ça fait
 
-- **Blocs texte** : taper les hanzi avec le clavier chinois de Windows. Le pinyin (couleur par ton) s'affiche au-dessus.
-  `ni3 hao3` devient `nǐ hǎo` (5 = ton neutre, `v` = `ü`). `# titre`, `- liste`.
-- **Pavé 手写** (Alt+H) : écrire un caractère au stylet, cliquer le bon candidat, il s'insère au curseur.
-  La reconnaissance tourne hors ligne (HanziLookupJS).
-- **Clic sur un mot** : sens en français (anglais en secours), prononciation, ordre des traits animé, quiz d'écriture,
-  ajout au vocabulaire, **correction du pinyin** quand la lecture automatique se trompe (stockée en `行[xíng]` dans le texte).
-- **Dessin libre** : stylet avec pression, surligneur, gomme (ou bouton arrière du stylet), le doigt fait défiler, la paume est ignorée.
+- **Éditeur riche** : gras, couleurs, surligneur, titres, listes, encadrés, **tableaux** (lignes/colonnes, en-tête, fusion).
+  Les lignes vides restent.
+- **Saisie pinyin → 汉字** (bouton « 中 » ou Maj seule) : taper `nihao` puis Espace → 你好, sens en français sous chaque
+  proposition, phrases entières (`woshixuesheng` → 我是学生). Espace = 1er choix, 1-9 = choix, Entrée = garder les lettres.
+- **Pinyin automatique** au-dessus des caractères (couleur par ton), lu en contexte (银行 → yín háng).
+  Affiché / au survol / masqué (Alt+P).
+- **Tons au clavier français** : `ni3 hao3` → `nǐ hǎo` (5 = neutre, `v` = `ü`).
+  Sélectionner du pinyin propose les caractères ; sélectionner des caractères permet de les remplacer par leur pinyin.
+- **Pavé 手写** (Alt+H) : écrire un mot de 1 à 3 caractères au stylet. Reconnaissance Google en ligne (lit des mots
+  entiers, désactivable) avec repli hors ligne (HanziLookupJS, un caractère par case).
+- **Dessin libre** au stylet (pression, surligneur, gomme). Le **bout gomme du stylet** efface. Le doigt fait défiler,
+  la paume est ignorée. Une zone de test du stylet est dans Réglages.
+- **Enregistrement du cours** (● Enregistrer) : audio Opus sauvé toutes les 5 s (rien n'est perdu si l'onglet plante),
+  repères ⏱ dans les notes (Alt+M) pour réécouter un passage, vitesse de lecture réglable.
+- **Clic sur un mot** : sens en français (anglais en secours), voix, ordre des traits animé, quiz d'écriture, ajout au
+  vocabulaire, correction de la lecture d'un caractère polyphone.
 - **Cases 田** : modèle + cases à repasser (modèle en transparence sur les premières).
-- **Vocabulaire par cours** : mots repérés automatiquement dans les notes, révision Lire 读 / Écrire 写 (boîtes de Leitner).
-- **Pinyin affiché / au survol / masqué** (Alt+P) pour s'auto-tester.
+- **Vocabulaire par cours** et révision Lire 读 / Écrire 写 (boîtes de Leitner).
 
 ## Stockage
 
 - Toujours dans le navigateur (IndexedDB).
-- **Dossier sur le disque** (recommandé, Chrome/Edge) : un fichier `.json` par cours. Un dossier OneDrive permet
-  sauvegarde et synchro entre PC. Le navigateur redemande l'autorisation à chaque ouverture (bouton « Reconnecter »).
-- Export/import d'une sauvegarde complète dans Réglages.
-
-## Voix
-
-Web Speech du système. Edge fournit d'office des voix chinoises naturelles (Xiaoxiao Online). Sous Chrome :
-Paramètres Windows › Heure et langue › Voix › Ajouter des voix › Chinois (simplifié).
+- **Dossier sur le disque** (recommandé, Chrome/Edge) : un fichier `.json` par cours, l'audio dans `audio/`. Un dossier
+  OneDrive donne sauvegarde et synchro entre PC. Le navigateur redemande l'autorisation à chaque ouverture
+  (bouton « Reconnecter »).
+- Export/import d'une sauvegarde (sans l'audio) dans Réglages. Les cours de la V1 sont convertis automatiquement.
 
 ## Développement
 
 ```bash
-bash scripts/fetch.sh          # télécharge dictionnaires + libs dans data/ (non versionné)
-python3 scripts/build_data.py  # génère site/data/* et site/vendor/*
-node tests/e2e.js              # test de bout en bout (playwright-core + chromium), stylet simulé
-node tests/sync.js             # test de la synchro dossier (servir site/ en http sur :8765)
+npm ci
+npm run data      # télécharge les sources (data/, non versionné) et régénère site/data/* — rarement utile
+npm run build     # src/*.js -> site/app.js (esbuild) + site/sw.js
+npm run watch     # idem en continu
+npm test          # bout en bout : playwright-core + chromium, stylet et micro simulés
+node tests/ime-engine.mjs   # moteur pinyin -> 汉字
 ```
 
-Tout est en scripts classiques (pas de modules ES, pas de fetch) pour fonctionner en `file://`.
+`site/data/` (dictionnaire, traits, reconnaissance) est versionné ; le JS est construit par la CI
+(`.github/workflows/pages.yml`) à chaque push sur `main`. Après `npm run build`, `site/index.html` s'ouvre aussi en `file://`.
 
 ## Crédits et licences
 
 - Dictionnaire : CFDICT (Chine Informations, CC BY-SA 3.0), compléments french-cedict (Laowai, CC BY-SA 4.0),
-  CC-CEDICT (MDBG, CC BY-SA 4.0).
-- Pinyin : pinyin-pro (MIT). Ordre des traits : Hanzi Writer (MIT), données Make Me a Hanzi (Arphic Public License).
-- Reconnaissance manuscrite : HanziLookupJS (GPL v3), d'après HanziLookup de Jordan Kiang.
+  CC-CEDICT (MDBG, CC BY-SA 4.0). Fréquences : wordfreq (CC BY-SA 4.0).
+- Éditeur : TipTap / ProseMirror (MIT). Pinyin : pinyin-pro (MIT). Ordre des traits : Hanzi Writer (MIT),
+  données Make Me a Hanzi (Arphic Public License).
+- Reconnaissance manuscrite hors ligne : HanziLookupJS (GPL v3), d'après HanziLookup de Jordan Kiang.
 - Police : Instrument Serif (OFL).

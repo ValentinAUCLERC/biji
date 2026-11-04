@@ -1,9 +1,11 @@
 /* Biji — dictionnaire, segmentation, pinyin, voix, données de traits */
+import { pinyin as pinyinPro } from 'pinyin-pro';
+
 (function () {
   const B = window.Biji;
 
   /* ---------- Dictionnaire (chargé à la demande, 15 Mo) ---------- */
-  const lex = (B.lex = { ready: false, map: new Map(), maxLen: 1 });
+  const lex = (B.lex = { ready: false, map: new Map(), maxLen: 1, bySyl: new Map() });
   let loading = null;
   lex.load = function () {
     if (loading) return loading;
@@ -14,12 +16,14 @@
       while (start < raw.length) {
         let end = raw.indexOf('\n', start);
         if (end < 0) end = raw.length;
-        const [s, t, p, fr, en] = raw.slice(start, end).split('\t');
+        const [s, t, p, fr, en, f] = raw.slice(start, end).split('\t');
         start = end + 1;
-        const e = { s, t, p, fr: fr ? fr.split('|') : [], en: en ? en.split('|') : [] };
+        const e = { s, t, p, fr: fr ? fr.split('|') : [], en: en ? en.split('|') : [], f: +f || 0 };
         add(s, e);
         if (t !== s) add(t, e);
+        indexSyl(e);
       }
+      for (const a of lex.bySyl.values()) a.sort((x, y) => y.f - x.f);
       lex.ready = true;
       document.dispatchEvent(new CustomEvent('biji:dict'));
     });
@@ -31,8 +35,27 @@
     else lex.map.set(k, [e]);
     if (k.length > lex.maxLen && k.length <= 8) lex.maxLen = k.length;
   }
+  /** Index pinyin sans ton -> mots (pour la saisie pinyin -> hanzi). Clé : « ni hao » */
+  function indexSyl(e) {
+    if (!B.HAN.test(e.s) || /[A-Za-z0-9·，]/.test(e.s)) return;
+    const syl = e.p.toLowerCase().replace(/u:/g, 'v').split(' ').map((x) => x.replace(/[1-5]$/, ''));
+    if (syl.length !== [...e.s].length || syl.some((x) => !/^[a-z]+$/.test(x))) return;
+    if (/^(variante|variant of|ancienne variante|old variant|forme archaïque)/i.test(e.fr[0] || e.en[0] || '')) return;
+    const k = syl.join(' ');
+    let a = lex.bySyl.get(k);
+    if (!a) lex.bySyl.set(k, (a = []));
+    let f = e.f + (e.p[0] === e.p[0].toLowerCase() ? 0 : -8);
+    // caractère polyphone : la fréquence est celle du caractère, pas de cette lecture -> on pénalise les lectures secondaires
+    if (syl.length === 1 && e.f > 30) {
+      const main = pinyinPro(e.s, { toneType: 'none', v: true });
+      if (main && main !== syl[0]) f -= 25;
+    }
+    const prev = a.find((x) => x.w === e.s);
+    if (prev) { if (f > prev.f) prev.f = f; return; }
+    a.push({ w: e.s, f, e });
+  }
 
-  /** Entrées triées : lecture la plus probable en premier (FR présent, puis minuscule = nom commun) */
+  /** Entrées triées : lecture la plus probable en premier */
   lex.lookup = function (w) {
     const a = (lex.map.get(w) || []).slice();
     return a.sort((x, y) => score(y) - score(x));
@@ -41,7 +64,7 @@
       if (e.s === w) s += 4;
       if (e.fr.length) s += 2;
       if (e.p[0] === e.p[0].toLowerCase()) s += 1;
-      if (/variante|variant of|utilisé dans|used in/i.test((e.fr[0] || e.en[0] || ''))) s -= 3;
+      if (/variante|variant of|utilisé dans|used in/i.test(e.fr[0] || e.en[0] || '')) s -= 3;
       return s;
     }
   };
@@ -70,19 +93,27 @@
     if (e.fr.length) return e.fr.slice(0, max).join(' ; ');
     return e.en.length ? '(en) ' + e.en.slice(0, max).join(' ; ') : '';
   };
+  /** Sens très court (candidats de saisie) */
+  lex.shortGloss = function (w, e) {
+    e = e || lex.lookup(w)[0];
+    if (!e) return '';
+    let g = (e.fr[0] || e.en[0] || '').replace(/\([^)]*\)\s*/g, '').replace(/\[[^\]]*\]/g, '').trim();
+    if (!g) g = (e.fr[1] || e.en[1] || '').replace(/\([^)]*\)\s*/g, '').trim();
+    return g.length > 20 ? g.slice(0, 19) + '…' : g;
+  };
 
-  /** Pinyin contextuel d'une suite de hanzi (pinyin-pro), une syllabe par caractère */
+  /** Pinyin contextuel d'une suite de hanzi, une syllabe par caractère */
   lex.pinyinRun = function (run) {
     try {
-      return window.pinyinPro.pinyin(run, { type: 'array', toneType: 'symbol' });
+      return pinyinPro(run, { type: 'array', toneType: 'symbol' });
     } catch (e) {
       return [...run].map(() => '');
     }
   };
 
   /** Pinyin d'un mot pour le vocab : lecture du dictionnaire qui colle au contexte, sinon pinyin-pro */
-  lex.bestReading = function (word) {
-    const auto = lex.pinyinRun(word).join(' ');
+  lex.bestReading = function (word, ctxPy) {
+    const auto = ctxPy || lex.pinyinRun(word).join(' ');
     const ents = lex.lookup(word);
     const same = ents.find((e) => B.numToMarks(e.p).toLowerCase() === auto.toLowerCase());
     return { py: same ? B.numToMarks(same.p) : auto, entry: same || ents[0] || null };
@@ -91,6 +122,7 @@
   /* ---------- Voix (Web Speech, voix chinoise du système) ---------- */
   B.voice = {
     list() {
+      if (!('speechSynthesis' in window)) return [];
       return speechSynthesis.getVoices().filter((v) => /^zh[-_](CN|Hans)/i.test(v.lang) || /^cmn/i.test(v.lang));
     },
     pick() {
@@ -136,6 +168,7 @@
       });
     });
   };
+  B.strokeDataSync = (ch) => hwCache.get(ch);
   B.hwLoader = (ch, ok, ko) => B.strokeData(ch).then(ok, ko);
 
   /** Dessine le caractère modèle (contours Hanzi Writer) dans un contexte 2D, carré de taille size */

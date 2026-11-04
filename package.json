@@ -1,0 +1,30 @@
+{
+  "name": "biji",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Notes de cours de chinois : clavier + stylet",
+  "scripts": {
+    "data": "bash scripts/fetch.sh && python3 scripts/build_data.py",
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "node tests/e2e.js && node tests/sync.js && node tests/ime-engine.mjs"
+  },
+  "dependencies": {
+    "@tiptap/core": "^3.32.2",
+    "@tiptap/extension-highlight": "^3.32.2",
+    "@tiptap/extension-table": "^3.32.2",
+    "@tiptap/extension-text-style": "^3.32.2",
+    "@tiptap/extensions": "^3.32.2",
+    "@tiptap/pm": "^3.32.2",
+    "@tiptap/starter-kit": "^3.32.2",
+    "fix-webm-duration": "^1.0.6",
+    "hanzi-writer": "^3.7.3",
+    "pinyin-pro": "^3.29.5"
+  },
+  "devDependencies": {
+    "@fontsource/instrument-serif": "^5.3.0",
+    "esbuild": "^0.28.2",
+    "hanzi-writer-data": "^2.0.1",
+    "playwright-core": "^1.64.1"
+  }
+}

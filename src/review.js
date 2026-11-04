@@ -1,4 +1,6 @@
 /* Biji — révision du vocabulaire (boîtes de Leitner simples) : lire (hanzi -> sens) ou écrire (sens -> hanzi au stylet) */
+import HanziWriter from 'hanzi-writer';
+
 (function () {
   const B = window.Biji;
   const R = (B.review = {});
@@ -104,7 +106,7 @@
       const ch = chars[idx++];
       target.replaceChildren();
       status.replaceChildren(B.h('p', `Caractère ${idx} / ${chars.length}`), reveal);
-      writer = window.HanziWriter.create(target, ch, {
+      writer = HanziWriter.create(target, ch, {
         width: 240, height: 240, padding: 10, charDataLoader: B.hwLoader, showCharacter: false, showOutline: false,
         drawingColor: '#1f1d1a', drawingWidth: 10, strokeColor: '#1f1d1a', highlightColor: '#2b5fc4', showHintAfterMisses: 3,
         onLoadCharDataError: () => { status.replaceChildren(B.h('p', `Pas de données de traits pour ${ch}`)); setTimeout(step, 800); },
