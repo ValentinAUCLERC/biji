@@ -3,7 +3,7 @@
 @font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: swap;
   src: url(fonts/instrument-serif-latin-400-italic.woff2) format("woff2"); }
 @font-face { font-family: "Instrument Serif"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(fonts/instrument-serif-latin-ext-400-normal.woff2) format("woff2"); unicode-range: U+0100-024F, U+1E00-1EFF; }
+  src: url(fonts/instrument-serif-latin-ext-400-normal.woff2) format("woff2"); unicode-range: U+0100-01CC, U+01DD-024F, U+1E00-1EFF; } /* ǎ ǐ ǒ ǔ ǚ… absents d’Instrument Serif : Georgia / serif prend le relais (sinon caron décollé) */
 
 :root {
   --paper: #f4eee2;
