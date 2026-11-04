@@ -2,13 +2,14 @@
 (function () {
   const B = window.Biji;
   const A = (B.app = {});
-  const DEFAULTS = { pinyin: 'show', pySize: 'm', toneColors: true, fingerDraw: false, toneConv: true, voice: '', ime: false, onlineHw: true };
+  const DEFAULTS = { pinyin: 'show', pySize: 'm', toneColors: true, fingerDraw: false, penFirst: false, toneConv: true, voice: '', ime: false, onlineHw: true };
   B.settings = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('biji.settings') || '{}'));
   A.saveSettings = () => { localStorage.setItem('biji.settings', JSON.stringify(B.settings)); applySettings(); };
   function applySettings() {
     document.body.dataset.pinyin = B.settings.pinyin;
     document.body.dataset.pysize = B.settings.pySize;
     document.body.classList.toggle('tones', !!B.settings.toneColors);
+    document.body.classList.toggle('penfirst', !!B.settings.penFirst);
   }
 
   const INKS = [
@@ -37,6 +38,9 @@
       B.h('span.sep'),
       ...tools,
       B.h('button.icon', { title: 'Annuler le dernier trait', onclick: () => B.lastInk && B.lastInk.undo() }, '↶'),
+      B.h('button.pill#penbtn', { class: B.settings.penFirst ? 'on' : null, title: 'Mode stylet d’abord : seul le stylet dessine, et il fait défiler la page hors des dessins (appui maintenu = sélectionner)',
+        onclick: (e) => { B.settings.penFirst = !B.settings.penFirst; A.saveSettings(); e.currentTarget.classList.toggle('on', B.settings.penFirst);
+          B.toast(B.settings.penFirst ? 'Mode stylet : le stylet fait défiler, seul le stylet dessine' : 'Mode stylet désactivé'); } }, '✒ Stylet'),
       B.h('span.sep'),
       B.h('button.pill.rec', { 'data-act': 'rec', onclick: recClick }, '● Enregistrer'),
       B.h('button.pill', { 'data-act': 'recpause', hidden: true, onclick: () => B.rec.pause() }, '❚❚ Pause'),
@@ -190,7 +194,8 @@
       row(['Conversion « ni3 » → « nǐ » à la frappe ', chk('toneConv')], null, 'En clavier français : taper la syllabe puis le chiffre du ton (5 = neutre). « v » donne « ü » : « lv4 » → « lǜ ».'),
       B.h('h2', 'Stylet'),
       row(['Reconnaissance d’écriture en ligne (Google) ', chk('onlineHw')], null, 'Beaucoup plus fiable et lit des mots entiers. Les tracés du pavé 手写 (et seulement eux) sont envoyés à Google. Désactivé, ou sans connexion : moteur local, moins précis, un caractère par case.'),
-      row(['Dessiner aussi au doigt ', chk('fingerDraw')], null, 'Désactivé : le doigt fait défiler la page et seuls le stylet et la souris dessinent (la paume posée est ignorée).'),
+      row(['Mode stylet d’abord ', chk('penFirst', () => settingsPage())], null, 'Seul le stylet dessine (la souris et le doigt ne tracent plus). Hors des zones de dessin, glisser le stylet fait défiler la page ; toucher place le curseur ; appuyer un instant puis glisser sélectionne du texte.'),
+      st.penFirst ? null : row(['Dessiner aussi au doigt ', chk('fingerDraw')], null, 'Désactivé : le doigt fait défiler la page et seuls le stylet et la souris dessinent (la paume posée est ignorée).'),
       penTest(),
       B.h('p.hint', 'Si le bout gomme n’est pas reconnu ici, c’est le pilote du stylet qui ne le signale pas au navigateur (Paramètres Windows › Bluetooth et appareils › Stylet et Windows Ink, ou logiciel du fabricant : affecter « Gomme » au bout/bouton). Le bouton Gomme de la barre d’outils marche dans tous les cas.'),
       B.h('h2', 'Voix'),

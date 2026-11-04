@@ -7,7 +7,7 @@
     "data": "bash scripts/fetch.sh && python3 scripts/build_data.py",
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
-    "test": "node tests/e2e.js && node tests/sync.js && node tests/cloud.js && node tests/ime-engine.mjs"
+    "test": "node tests/e2e.js && node tests/sync.js && node tests/cloud.js && node tests/penfirst.js && node tests/ime-engine.mjs"
   },
   "dependencies": {
     "@tiptap/core": "^3.32.2",

@@ -378,3 +378,7 @@ pre.pentest { font: 13px/1.5 ui-monospace, Consolas, monospace; background: #f6e
   body.card-open #pad { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* mode stylet d'abord */
+body.penfirst.pen-selecting { cursor: text; }
+body.penfirst .inkc { cursor: crosshair; }

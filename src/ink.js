@@ -147,7 +147,10 @@
       const pr = e.pointerType === 'pen' ? (e.pressure || 0.2) : 0.5;
       return [Math.round(((e.clientX - r.left) / s) * 10) / 10, Math.round(((e.clientY - r.top) / s) * 10) / 10, Math.round(pr * 100) / 100];
     }
-    fingerDraws() { return this.o.fingerDraw ? this.o.fingerDraw() : !!(B.settings && B.settings.fingerDraw); }
+    fingerDraws() {
+      if (B.penFirst()) return false; // mode stylet : le doigt fait défiler, partout
+      return this.o.fingerDraw ? this.o.fingerDraw() : !!(B.settings && B.settings.fingerDraw);
+    }
     down(e) {
       if (this.cur) return;
       const pen = e.pointerType === 'pen' || e.pointerType === 'eraser';
@@ -161,6 +164,10 @@
         }
       }
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.pointerType === 'mouse' && B.penFirst()) {
+        if (!B.penFirst.warned) { B.penFirst.warned = true; B.toast('Mode stylet : la souris ne dessine pas (Réglages › Stylet)', 3500); }
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       try { this.c.setPointerCapture(e.pointerId); } catch (err) { /* pointeur synthétique */ }
@@ -256,6 +263,101 @@
     destroy() { this.ro.disconnect(); }
   }
   B.Ink = Ink;
+
+  /* ---------- Mode « stylet d'abord » ----------
+   * Hors des zones de dessin, le stylet fait défiler la page (au lieu de sélectionner du texte) :
+   *   glisser = défiler (avec élan), toucher = placer le curseur / cliquer,
+   *   appui maintenu puis glisser = sélectionner du texte (pour la bulle pinyin → 汉字).
+   * La souris et le doigt ne dessinent plus : seul le stylet trace.
+   */
+  B.penFirst = () => !!(B.settings && B.settings.penFirst);
+  const NOSCROLL = 'canvas, button, a, input, select, textarea, label, summary, audio, video, .grip, #bubble, #imebox, #pad, .penzone, [data-noscroll]';
+  const HOLD_MS = 450, SLOP = 7;
+  let ps = null, glide = 0, eatClick = false;
+  const canScroll = (el, ax) => {
+    const st = getComputedStyle(el);
+    return ax === 'y'
+      ? /(auto|scroll)/.test(st.overflowY) && el.scrollHeight > el.clientHeight + 1
+      : /(auto|scroll)/.test(st.overflowX) && el.scrollWidth > el.clientWidth + 1;
+  };
+  const scroller = (t, ax) => {
+    for (let el = t; el && el !== document.body && el !== document.documentElement; el = el.parentElement) if (canScroll(el, ax)) return el;
+    return ax === 'y' ? document.scrollingElement : null;
+  };
+  const pmAt = (x, y) => {
+    const ed = B.editor && B.editor.editor;
+    if (!ed || !ed.view.dom.contains(document.elementFromPoint(x, y))) return null;
+    const r = ed.view.posAtCoords({ left: x, top: y });
+    return r ? { ed, pos: r.pos } : null;
+  };
+  document.addEventListener('pointerdown', (e) => {
+    cancelAnimationFrame(glide);
+    if (!B.penFirst() || e.pointerType !== 'pen' || e.button !== 0 || B.isEraser(e)) return;
+    if (!document.getElementById('main') || !document.getElementById('main').contains(e.target) || e.target.closest(NOSCROLL)) return;
+    e.preventDefault(); // pas de sélection de texte native ni de focus : on décide au relâcher
+    ps = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now(), mode: 'tap',
+      sy: scroller(e.target, 'y'), sx: scroller(e.target, 'x'), v: [], target: e.target };
+    ps.hold = setTimeout(() => {
+      if (!ps || ps.mode !== 'tap') return;
+      const at = pmAt(ps.x, ps.y);
+      if (!at) return;
+      ps.mode = 'select';
+      ps.anchor = at.pos;
+      at.ed.chain().focus().setTextSelection(at.pos).run();
+      document.body.classList.add('pen-selecting');
+    }, HOLD_MS);
+  }, true);
+  document.addEventListener('pointermove', (e) => {
+    if (!ps || e.pointerId !== ps.id) return;
+    const dx = e.clientX - ps.x, dy = e.clientY - ps.y;
+    if (ps.mode === 'tap' && Math.hypot(e.clientX - ps.x0, e.clientY - ps.y0) > SLOP) { ps.mode = 'scroll'; clearTimeout(ps.hold); }
+    if (ps.mode === 'scroll') {
+      e.preventDefault();
+      if (ps.sy) ps.sy.scrollTop -= dy;
+      if (ps.sx) ps.sx.scrollLeft -= dx;
+      const now = performance.now();
+      ps.v.push([now, dx, dy]);
+      while (ps.v.length && now - ps.v[0][0] > 90) ps.v.shift();
+    } else if (ps.mode === 'select') {
+      e.preventDefault();
+      const at = pmAt(e.clientX, e.clientY);
+      if (at) at.ed.commands.setTextSelection({ from: Math.min(ps.anchor, at.pos), to: Math.max(ps.anchor, at.pos) });
+    }
+    ps.x = e.clientX;
+    ps.y = e.clientY;
+  }, true);
+  const end = (e, cancel) => {
+    if (!ps || e.pointerId !== ps.id) return;
+    const s = ps;
+    ps = null;
+    clearTimeout(s.hold);
+    document.body.classList.remove('pen-selecting');
+    if (cancel) return; // le navigateur a repris la main (défilement natif)
+    if (s.mode === 'tap') {
+      const at = pmAt(e.clientX, e.clientY);
+      if (at) at.ed.chain().focus().setTextSelection(at.pos).run();
+      return; // le « click » natif suit (bulle d'un mot, liens…)
+    }
+    eatClick = true;
+    setTimeout(() => { eatClick = false; }, 350);
+    if (s.mode === 'scroll' && s.v.length > 1) {
+      // élan : vitesse des 90 dernières ms, freinée à chaque image
+      const span = Math.max(16, performance.now() - s.v[0][0]);
+      let vx = s.v.reduce((a, v) => a + v[1], 0) / span * 16, vy = s.v.reduce((a, v) => a + v[2], 0) / span * 16;
+      if (Math.abs(vy) < 2 && Math.abs(vx) < 2) return;
+      const step = () => {
+        if (s.sy) s.sy.scrollTop -= vy;
+        if (s.sx) s.sx.scrollLeft -= vx;
+        vx *= 0.94; vy *= 0.94;
+        if (Math.abs(vy) > 0.4 || Math.abs(vx) > 0.4) glide = requestAnimationFrame(step);
+      };
+      glide = requestAnimationFrame(step);
+    }
+  };
+  document.addEventListener('pointerup', (e) => end(e), true);
+  document.addEventListener('pointercancel', (e) => end(e, true), true);
+  document.addEventListener('click', (e) => { if (eatClick) { eatClick = false; e.preventDefault(); e.stopPropagation(); } }, true);
+  document.addEventListener('wheel', () => cancelAnimationFrame(glide), { passive: true });
 
   /** Fond « case 田 » : bord + croix en pointillés */
   B.bgTian = function (ctx, scale, w, h, color = '#e3a99f') {

@@ -18,6 +18,9 @@ Une fois visité, il marche hors ligne.
   entiers, désactivable) avec repli hors ligne (HanziLookupJS, un caractère par case).
 - **Dessin libre** au stylet (pression, surligneur, gomme). Le **bout gomme du stylet** efface. Le doigt fait défiler,
   la paume est ignorée. Une zone de test du stylet est dans Réglages.
+- **Mode stylet d'abord** (bouton ✒ Stylet ou Réglages) : seul le stylet dessine (souris et doigt ne tracent plus) ;
+  hors des dessins, glisser le stylet fait défiler la page (avec élan), toucher place le curseur,
+  appui maintenu ½ s puis glisser sélectionne du texte.
 - **Enregistrement du cours** (● Enregistrer) : audio Opus sauvé toutes les 5 s (rien n'est perdu si l'onglet plante),
   repères ⏱ dans les notes (Alt+M) pour réécouter un passage, vitesse de lecture réglable.
 - **Clic sur un mot** : sens en français (anglais en secours), voix, ordre des traits animé, quiz d'écriture, ajout au
@@ -62,6 +65,7 @@ npm run watch     # idem en continu
 npm test          # bout en bout : playwright-core + chromium, stylet et micro simulés
 node tests/ime-engine.mjs   # moteur pinyin -> 汉字
 node tests/cloud.js         # synchro Google Drive PC <-> téléphone contre un faux Drive local
+node tests/penfirst.js      # mode « stylet d’abord » (défilement au stylet, souris sans dessin)
 ```
 
 `site/data/` (dictionnaire, traits, reconnaissance) est versionné ; le JS est construit par la CI
