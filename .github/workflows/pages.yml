@@ -35,3 +35,5 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 1800000 # 30 min : ~10 000 fichiers (dictionnaire, traits), Pages peut mettre plus de 10 min
