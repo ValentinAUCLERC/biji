@@ -399,3 +399,34 @@ body.penfirst .inkc { cursor: crosshair; }
 /* hors ligne */
 #netstate { display: none; font: 600 12px var(--ui); color: #8a5a00; background: #fff1c9; border: 1px solid #ecd28a; border-radius: 12px; padding: 3px 9px; cursor: pointer; white-space: nowrap; }
 body.offline #netstate { display: inline-block; }
+
+/* aide-mémoire des tons */
+#tonecard { position: fixed; left: calc(var(--sidew, 260px) + 14px); bottom: 14px; z-index: 35; width: 292px; background: var(--sheet, #fffefa);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 22px #0002; padding: 8px 10px 9px; font: 13px/1.3 var(--ui); user-select: none; }
+#tonecard header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+#tonecard header b { font-size: 14px; }
+#tonecard header .hint { color: var(--muted); font-size: 12px; margin-right: auto; }
+#tonecard header button { min-height: 26px; min-width: 26px; padding: 0; font-size: 18px; line-height: 1; }
+#tonecard table { border-collapse: collapse; width: 100%; }
+#tonecard tr { cursor: pointer; }
+#tonecard tr:hover { background: #f1ead9; }
+#tonecard td { padding: 2px 4px; vertical-align: middle; border-top: 1px solid #efe7d6; }
+#tonecard tr:first-child td { border-top: 0; }
+#tonecard .tc-n { font: 700 17px var(--ui); width: 20px; text-align: center; color: var(--ink); }
+#tonecard .tc-py { font: 600 20px/1.1 var(--ui); width: 46px; }
+#tonecard tr.t1 .tc-py { color: var(--t1); } #tonecard tr.t2 .tc-py { color: var(--t2); } #tonecard tr.t3 .tc-py { color: var(--t3); }
+#tonecard tr.t4 .tc-py { color: var(--t4); } #tonecard tr.t5 .tc-py { color: var(--t5); }
+#tonecard .tc-svg { width: 28px; }
+#tonecard .tc-curve { width: 22px; height: 30px; display: block; }
+#tonecard .tc-curve.t1 { color: var(--t1); } #tonecard .tc-curve.t2 { color: var(--t2); } #tonecard .tc-curve.t3 { color: var(--t3); }
+#tonecard .tc-curve.t4 { color: var(--t4); } #tonecard .tc-curve.t5 { color: var(--t5); }
+#tonecard .tc-how { color: var(--ink); white-space: nowrap; }
+#tonecard .tc-how small { display: block; color: var(--muted); font-size: 11.5px; }
+#tonecard .tc-tip { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+#tonecard kbd { font: 600 12px ui-monospace, monospace; background: #f1ead9; border: 1px solid #ddd2bc; border-radius: 4px; padding: 0 4px; color: var(--ink); }
+@media (max-width: 760px) {
+  #tonecard { left: 8px; right: auto; bottom: 8px; width: auto; padding: 6px 8px; }
+  #tonecard .tc-how, #tonecard .tc-tip, #tonecard header .hint { display: none; }
+  #tonecard .tc-py { font-size: 18px; }
+}
+@media (max-width: 960px) { #tonecard { left: 8px; bottom: 8px; } }

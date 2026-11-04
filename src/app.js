@@ -2,7 +2,7 @@
 (function () {
   const B = window.Biji;
   const A = (B.app = {});
-  const DEFAULTS = { pinyin: 'show', pySize: 'm', toneColors: true, fingerDraw: false, penFirst: false, toneConv: true, voice: '', ime: false, onlineHw: true };
+  const DEFAULTS = { pinyin: 'show', pySize: 'm', toneColors: true, fingerDraw: false, penFirst: false, toneConv: true, toneCard: true, voice: '', ime: false, onlineHw: true };
   B.settings = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('biji.settings') || '{}'));
   A.saveSettings = () => { localStorage.setItem('biji.settings', JSON.stringify(B.settings)); applySettings(); };
   function applySettings() {
@@ -34,6 +34,7 @@
     const bar = B.h('div#toolbar',
       B.h('button.icon.menu', { title: 'Cours', onclick: () => document.body.classList.toggle('side-open') }, '☰'),
       B.h('button.pill', { 'data-act': 'pad', class: B.pad.open ? 'on' : null, title: 'Pavé d’écriture manuscrite (Alt+H)', onclick: () => B.pad.toggle() }, '✍ 手写'),
+      B.h('button.pill#tonebtn', { class: B.settings.toneCard ? 'on' : null, title: 'Aide-mémoire des tons (chiffres → accents)', onclick: () => toneCard(!B.settings.toneCard) }, 'Tons 1-5'),
       B.h('button.pill#pinbtn', { title: 'Affichage du pinyin (Alt+P)', onclick: cyclePinyin }, PIN[B.settings.pinyin]),
       B.h('span.sep'),
       ...tools,
@@ -298,9 +299,47 @@
     setTimeout(() => B.lex.load().catch((e) => B.toast(e.message, 6000)), 50);
     if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => { if (location.hash === '#/reglages') settingsPage(); };
     registerSW();
+    if (B.settings.toneCard) toneCard(true);
     B.net.start();
     document.addEventListener('biji:net', (e) => { if (e.detail.online && B.editor.lesson) B.net.warmChars(B.docText(B.editor.lesson.doc)); A.renderSide(); });
   };
+
+  /* ---------- aide-mémoire des tons (encart flottant, repliable) ---------- */
+  const TONES = [
+    [1, 'mā', '妈', 'haut et plat', 'maman', 'M3 30 H37'],
+    [2, 'má', '麻', 'monte (« hein ? »)', 'chanvre', 'M3 46 L37 14'],
+    [3, 'mǎ', '马', 'descend puis remonte', 'cheval', 'M3 36 Q16 58 24 50 T37 22'],
+    [4, 'mà', '骂', 'descend vite, sec', 'gronder', 'M3 10 L37 50'],
+    [5, 'ma', '吗', 'neutre : court et léger', '? (question)', 'M13 36 h12'],
+  ];
+  function toneCard(on) {
+    B.settings.toneCard = on;
+    A.saveSettings();
+    const b = B.$('#tonebtn');
+    if (b) b.classList.toggle('on', on);
+    let el = B.$('#tonecard');
+    if (!on) { if (el) el.remove(); return; }
+    if (el) return;
+    const svg = (d, t) => {
+      const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      s.setAttribute('viewBox', '0 0 40 60');
+      s.setAttribute('class', 'tc-curve t' + t);
+      s.innerHTML = '<path d="M1 10H39M1 50H39" stroke="#d9d0bf" stroke-width="1" fill="none"/><path d="' + d + '" stroke="currentColor" stroke-width="4.5" fill="none" stroke-linecap="round"/>';
+      return s;
+    };
+    el = B.h('aside#tonecard', { 'aria-label': 'Aide-mémoire des tons' },
+      B.h('header', B.h('b', 'Les tons'), B.h('span.hint', 'clic = écouter'),
+        B.h('button.icon', { title: 'Fermer (bouton « Tons 1-5 » pour rouvrir)', onclick: () => toneCard(false) }, '×')),
+      B.h('table', B.h('tbody', ...TONES.map(([n, py, hz, how, sens, d]) =>
+        B.h('tr', { class: 't' + n, title: 'Écouter ' + hz + ' ' + py + ' (' + sens + ')', onclick: () => B.voice.speak(hz) },
+          B.h('td.tc-n', String(n)), B.h('td.tc-py', py), B.h('td.tc-svg', svg(d, n)), B.h('td.tc-how', how, B.h('small', hz + ' ' + sens)))))),
+      B.h('p.tc-tip', 'Taper ', B.h('kbd', 'ma3'), ' → mǎ · ', B.h('kbd', 'v'), ' = ü (', B.h('kbd', 'lv4'), ' → lǜ)'),
+      B.h('p.tc-tip', 'Accent sur : a, sinon e, sinon le o de « ou », sinon la dernière voyelle (', B.h('i', 'xiè, duō, guì'), ')'));
+    // ne prend pas le focus : le curseur reste dans les notes
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    document.body.appendChild(el);
+  }
+  A.toneCard = toneCard;
 
   /* ---------- installation (PWA) : icône sur le bureau / l'écran d'accueil, fenêtre à part ---------- */
   let installEvt = null;
